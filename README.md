@@ -1,4 +1,9 @@
-# Medusa Bloom
+# Bloom & Bust
+
+*As the fish go bust, the jellyfish bloom.* Overfish a sea and jellyfish move into the empty
+niche — a jellyfish bloom is, ecologically, what a collapsed fishery looks like. So this renders
+70 years of North Atlantic fish stocks **as** a drift of jellyfish: the fuller and greener the
+tank, the healthier the sea; a tank of amber-and-coral husks is a fishery that busted.
 
 A drift of jellyfish, each one a fish stock of the Northeast Atlantic. On load it plays itself —
 a slow, continuous sweep from 1950 to 2018 — and you watch the tank fill green then go dark as the

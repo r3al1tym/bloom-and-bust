@@ -228,7 +228,7 @@ export function BloomRenderer({
 
       <aside className="bloom-side">
         <div className="bloom-legend">
-          <h1 className="bloom-h1">Medusa Bloom</h1>
+          <h1 className="bloom-h1">Bloom &amp; Bust</h1>
           <p className="bloom-lede">
             A drift of jellyfish — each one a fish stock of the {region}, {span}. Drag the years and
             watch the tank thin out as the fisheries fall.
