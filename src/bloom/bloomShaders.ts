@@ -174,14 +174,24 @@ export const bellFragment = /* glsl */ `
     // fake wall-thickness: thick warm apex knob → near-knife margin
     float thickness = mix(0.02, 0.16, vHeight);
 
-    // two-tone body: one hemisphere leans engineering-bright, the other experience — single hue
+    // two-tone hemisphere sheen (single hue) → the SATURATED fate pigment.
     float side = smoothstep(uSplit - 0.15, uSplit + 0.15, N.x * 0.5 + 0.5);
-    vec3 body = mix(uColor, uColorB, side);
+    vec3 pigment = mix(uColor, uColorB, side);   // the saturated fate hue (rim/lantern/frill carry this)
 
-    // (1) split Fresnel — tight glassy edge + broad body falloff
+    // NATURALISTIC GEL — a real medusa is mostly clear, caustic-lit gel with only faint pigment, not a
+    // flat coloured swatch. Drain most of the saturated hue out of the translucent DOME FILL toward a
+    // neutral deep-water gel, and CONCENTRATE the fate hue in the rim, the lantern core, the halo, and
+    // the trailing brain/tentacles. The fate then reads as the creature's glowing coloured CORE seen
+    // through clear gel — more real, and the clear dome is exactly what lets the brighter brain read
+    // through it. (Fate still legible at a 28-glance via rim + core + halo + coloured trails.)
+    const vec3 GEL_TINT = vec3(0.439, 0.600, 0.659);   // #7099a8
+    vec3 body = mix(GEL_TINT, pigment, 0.28);          // dome FILL: mostly gel, a wash of fate
+
+    // (1) split Fresnel — tight glassy edge + broad body falloff. Rim keeps the SATURATED pigment so
+    // the fate reads as a bright coloured contour even though the dome fill is near-clear gel.
     float rimT = pow(1.0 - ndv, 4.0);
     float rimB = pow(1.0 - ndv, 1.5);
-    vec3 rimGlow = min(body * 1.7, vec3(1.0)) + vec3(0.10, 0.14, 0.16); // cooler, whiter edge
+    vec3 rimGlow = min(pigment * 1.7, vec3(1.0)) + vec3(0.10, 0.14, 0.16); // cooler, whiter edge
     vec3 rim = (rimT * 1.2 + rimB * 0.5) * rimGlow;
 
     // (2) thickness/backlight transmission — the SSS fake. Key light below/behind.
@@ -193,8 +203,11 @@ export const bellFragment = /* glsl */ `
     // The tank hues are pale (a sea-green like #79e0a6 is already near-white), so brightening them
     // toward HDR desaturates to a white blob (spec RISK 1 — the cardinal failure). Build a SATURATED
     // twin of the hue and glow along THAT, so a cleared run blooms unmistakably GREEN, not white.
-    float lum = dot(body, vec3(0.299, 0.587, 0.114));
-    vec3 satHue = clamp(lum + (body - lum) * 2.4, 0.0, 1.0); // push chroma away from grey
+    // derive satHue from the SATURATED PIGMENT, not the desaturated gel body — the lantern is the fate
+    // core and MUST stay unmistakably coloured (a green survivor glows green, a coral husk glows coral),
+    // else draining the dome to gel would also grey out the one term that carries the fate at a glance.
+    float lum = dot(pigment, vec3(0.299, 0.587, 0.114));
+    vec3 satHue = clamp(lum + (pigment - lum) * 2.4, 0.0, 1.0); // push chroma away from grey
     satHue = normalize(satHue + 1e-4);
     float core = pow(1.0 - rimB, 1.6);           // tight apex weighting → a lantern, not a fill
 
@@ -339,7 +352,7 @@ export const neuralFragment = /* glsl */ `
   precision highp float;
   uniform float uTime;
   uniform float uSpeed;      // firing rate ← vitality (same field as the bell pulse)
-  uniform float uIntensity;  // ← spec.alive: husk barely sparks, hero brilliant
+  uniform float uIntensity;  // ← spec.alive (+ death throe): husk near-dark, hero brilliant
   uniform vec3 uColor;       // the bell's own semantic hue
   varying float vS;
   varying float vRad;
@@ -350,10 +363,19 @@ export const neuralFragment = /* glsl */ `
     float x1 = fract(vS * 1.3 - uTime * uSpeed);
     float x2 = fract(vS * 1.3 - uTime * uSpeed + 0.5);
     float spike = exp(-pow(x1 / 0.11, 2.0)) + exp(-pow(x2 / 0.11, 2.0));
-    float base = 0.42;                                  // resting filament — reads through the gel
-    float core = 1.2 * exp(-vRad * vRad * 2.0);         // dense glowing stomach anchor
-    vec3 col = uColor * ((base + core) + spike * 3.4) * uIntensity;
-    float a = clamp((base + core) * 0.95 + spike, 0.0, 1.0) * uIntensity;
+    // PROMINENT FAN — the fanned radial canals are the creature's "alive" signal, so make them read as
+    // its glowing core through the now-clearer gel. Raise the resting filament toward HDR (0.42→0.55)
+    // and add a gain so mipmapBlur Bloom feathers the 1px GL lines into apparent thickness (raw
+    // gl.LINES can't do width). A gamma-LIFT on intensity (pow<1) brightens living + mid-collapse minds
+    // so the fan is bold, WITHOUT giving a husk a bright brain — pow keeps 0→0, so "the mind goes out"
+    // (death-director) still holds while the fan gains prominence everywhere it's alive.
+    float base = 0.55;                                  // resting filament — HDR, reads through the gel
+    float core = 1.35 * exp(-vRad * vRad * 2.0);        // dense glowing stomach anchor
+    float lift = pow(clamp(uIntensity, 0.0, 1.0), 0.6); // brighten the living, leave the dead dark
+    float gain = 1.7;                                   // feed Bloom's mipmapBlur so lines gain width
+    vec3 col = uColor * ((base + core) * gain + spike * 3.4) * lift;
+    col = min(col, vec3(1.8));                          // cap: overlapping stomachs can't clip to white
+    float a = clamp((base + core) * 0.95 + spike, 0.0, 1.0) * lift;
     // the mind fades into the haze with distance too (additive → attenuate)
     float fog = fogFactor(vFogDepth);
     a *= (1.0 - 0.75 * fog);

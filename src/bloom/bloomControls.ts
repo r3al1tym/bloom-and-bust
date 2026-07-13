@@ -57,7 +57,10 @@ export interface BloomControlsState {
 // distinct creatures, not one white cloud.
 export const BLOOM_DEFAULTS = {
   bloomIntensity: 1.15,
-  bloomThreshold: 0.9,
+  // 0.9→0.87: let the now-HDR neural fan feather (mipmapBlur gives the 1px canals apparent width).
+  // Held above 0.86 as a white-clip guard — the brain gain (1.7) + clearer gel dome already push more
+  // energy through, and the threshold was raised to 0.9 originally because 28 lit stocks clipped white.
+  bloomThreshold: 0.87,
   bloomRadius: 0.85,
   grain: 0.45,
   vignette: 0.8,

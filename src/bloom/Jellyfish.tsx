@@ -163,6 +163,16 @@ export function Jellyfish({ spec, stock, position, selected, dimmed, focal, onSe
     const v = visualsAsOf(stock, ctl.decadeF)
     targetColor.set(v.tankColor)
     targetColorB.copy(targetColor).multiplyScalar(1.5)
+
+    // ── DEATH-THROE — the one MOMENT the continuous fade was missing. As survival (glow) falls through
+    // 0.1 (the collapsed→husk boundary — "all but gone"), the creature gives a last surge: the mind
+    // flares, the bell flushes a final coral, before the light releases and goes out. A Gaussian bump in
+    // glow-space centred on 0.1 (≈1 at the boundary, ~0 by glow 0 and 0.2). Because it's a pure function
+    // of glow (⟸ decadeF) it swells-and-releases on a forward scrub and RE-swells on a backward scrub —
+    // never a fired-once latch. The throes self-stagger because every stock crosses 0.1 at a different
+    // year, and the flare lives on the small dendrite brain (not the giant halo), so 8 near-simultaneous
+    // collapses read as scattered embers, not a fireworks show.
+    const throe = Math.exp(-Math.pow((v.glow - 0.1) / 0.045, 2))
     // pulse rate/depth/neural interpolated CONTINUOUSLY from survival (glow) — a stock's breath slows
     // smoothly as it dies rather than snapping at fate thresholds. Healthy ≈ slow-deep hero breath;
     // husk ≈ near-still. (Replaces the discrete PULSE[vitality] lookup for the animated targets.)
@@ -184,7 +194,10 @@ export function Jellyfish({ spec, stock, position, selected, dimmed, focal, onSe
       // ease fate-driven uniforms toward the current decade's state (color / glow / pulse / aliveness)
       ;(u.uColor.value as THREE.Color).lerp(targetColor, k)
       ;(u.uColorB.value as THREE.Color).lerp(targetColorB, k)
-      u.uGlow.value += (v.glow - u.uGlow.value) * k
+      // a final coral flush at the husk-crossing (throe rides the eased glow target so it swells then
+      // releases). Magnitude kept modest so the bell brightens relative to its own dim floor — an ember,
+      // not a hero flare — and stays under the Bloom threshold with the rest of the drift.
+      u.uGlow.value += (v.glow + throe * 0.5 - u.uGlow.value) * k
       u.uAlive.value += (v.alive - u.uAlive.value) * k
       u.uSplit.value += (spec.engWeight - u.uSplit.value) * k
       u.uPulseRate.value += (pRate - u.uPulseRate.value) * k
@@ -196,8 +209,10 @@ export function Jellyfish({ spec, stock, position, selected, dimmed, focal, onSe
       u.uFogDensity.value = ctl.fogDensity
       u.uSpeed.value += (pNeural - u.uSpeed.value) * k
       ;(u.uColor.value as THREE.Color).lerp(targetColor, k)
-      // dimmed creatures fire fainter; a sinking husk's mind nearly goes out
-      u.uIntensity.value = v.alive * (dimmed ? 0.4 : 1) * (1 - 0.5 * v.sink)
+      // dimmed creatures fire fainter; a sinking husk's mind goes nearly dark (0.8, so the dendrites
+      // fall toward ~0.03 while the bell membrane keeps its 0.12 alive floor — a ghost shell). At the
+      // husk-crossing the mind gives one last SURGE (+throe) before it releases: a body's final signal.
+      u.uIntensity.value = v.alive * (dimmed ? 0.4 : 1) * (1 - 0.8 * v.sink) + throe * 0.6
     }
     if (glassRef.current) {
       // HERO GLASS SHELL — MeshTransmissionMaterial runs its own vertex shader, so it CAN'T carry the
@@ -230,12 +245,24 @@ export function Jellyfish({ spec, stock, position, selected, dimmed, focal, onSe
       // it. Lossless (it contributes ~nothing there).
       if (haloSprite.current) haloSprite.current.visible = haloMat.current.opacity >= 0.012
     }
-    // tentacles/arms recolor with the fate too (their uColor is memoized per-appendage otherwise)
+    // tentacles/arms recolor with the fate too (their uColor is memoized per-appendage otherwise), and
+    // lose MUSCLE TONE as the stock dies: a dying medusa stops actively swimming, so its trails slow and
+    // shorten to a limp drag rather than a live swing. Scale amp/freq by glow off each material's own
+    // base (captured once) — keep SOME amp (→0 reads rigid, not slack). A severed stub has base amp 0,
+    // so the multiply leaves it 0 (never re-animates a snapped tentacle).
+    const slackAmp = 0.5 + 0.5 * v.glow
+    const slackFreq = 0.35 + 0.65 * v.glow
     for (const m of swayMats.current)
       if (m) {
         m.uniforms.uTime.value = t
         m.uniforms.uFogDensity.value = ctl.fogDensity
         ;(m.uniforms.uColor.value as THREE.Color).lerp(targetColor, k)
+        if (m.userData.baseAmp === undefined) {
+          m.userData.baseAmp = m.uniforms.uAmp.value
+          m.userData.baseFreq = m.uniforms.uFreq.value
+        }
+        m.uniforms.uAmp.value = m.userData.baseAmp * slackAmp
+        m.uniforms.uFreq.value = m.userData.baseFreq * slackFreq
       }
     if (group.current) {
       // shared water current — a slow common drift phased by world position, so the whole tank moves
@@ -244,31 +271,50 @@ export function Jellyfish({ spec, stock, position, selected, dimmed, focal, onSe
       const curX = Math.sin(t * 0.18 + position[0] * 0.25) * 0.18 + Math.sin(t * 0.11 + position[2] * 0.3) * 0.1
       const curY = Math.cos(t * 0.15 + position[0] * 0.2) * 0.12
 
+      // ── STILLNESS AT DEATH — death is the absence of motion. As a stock sinks toward husk, damp its
+      // OWN living motion (breath-bob + buoyant rise) toward a near-frozen rest; leave the shared water
+      // current (curX/curY) untouched so the corpse still drifts in the medium rather than freezing out
+      // of it. 1 while alive → 0.15 at full husk.
+      const stillness = 1 - 0.85 * v.sink
+
       // ── ORGANIC VERTICAL DRIFT — a real medusa breathes with a gentle vertical lilt, it does not
-      // pogo. The earlier fast pulse-kick fought the slow tentacle sway and read as jittery; this is a
-      // small, slow bob synced to the (now gentle) pulse plus a very slow long-period rise-and-fall, so
-      // the creature just hangs and breathes in the current. The tentacle sway + shared water current
-      // are the dominant motion. Amplitudes are small (world units) and tethered to the data slot.
+      // pogo. Small slow bob synced to the (gentle) pulse; the tentacle sway + shared current are the
+      // dominant motion. Amplitude is small (world units) and tethered to the data slot. Damped by
+      // stillness so a dying bell stops breathing.
       const pulsePhase = t * pRate + seed * 6.2831853
-      const bob = Math.sin(pulsePhase) * pDepth * 0.6 // a soft breath-bob, ~1/4 of the old kick
-      const lilt = Math.sin(t * (0.09 + 0.04 * v.glow) + seed * 6.28) * 0.28 // slow long lift/settle
+      const bob = Math.sin(pulsePhase) * pDepth * 0.6 * stillness // a soft breath-bob
+
+      // ── BUOYANT ASCENT — the bloom RISES with purpose instead of bobbing aimlessly in place. The old
+      // `lilt` was zero-mean AND phased by each creature's own seed, so 28 independent lifts averaged to
+      // nothing — a static diorama. The fix is COHERENCE: one IDENTICAL vertical phase across the whole
+      // field (no seed, no position term) so the bloom heaves up the water column as a single mass. The
+      // slowest motion in the tank (~63s period, below curX's ~35s) so it reads as deliberate ascent.
+      // Lift scales with survival: a healthy sea hovers UP toward the surface light; a dying one loses
+      // lift and the sink takes over. A tiny per-creature detune (an order below the shared term) keeps
+      // the unison organic, not a rigid elevator. Bounded pure f(clock, glow) — slot-anchored, no
+      // accumulator, reversible on forward/backward scrub.
+      const riseCommon = 0.5 + 0.5 * Math.sin(t * 0.10) // 0..1, SHARED phase — the field lifts as one
+      const detune = Math.sin(t * 0.13 + seed * 6.28) * 0.06 // ±0.06 organic jitter, well below the unison
+      const lift = v.glow * (0.15 + 0.55 * riseCommon + detune) * stillness // 0 dead → hovers 0.15–0.70 alive
 
       // ── DEATH SINK — a collapsing stock loses buoyancy and slowly settles DOWN into the dark deep,
       // visibly losing life (bell/halo/mind dimming handled above). Healthy = 0; a husk sinks ~3.4
-      // units below its slot into the fog. Eased implicitly by the smooth glow interpolation, so as the
-      // year sweeps the graveyard drifts downward rather than snapping small.
+      // units below its slot into the fog. Composes with `lift` so the vertical axis itself tells the
+      // story: alive = drawn up toward the light, collapse = released down into the dark.
       const SINK_DEPTH = 3.4
       const sinkY = -v.sink * SINK_DEPTH
 
       group.current.position.x = position[0] + curX
-      group.current.position.y = position[1] + curY + bob + lilt + sinkY
+      group.current.position.y = position[1] + curY + bob + lift + sinkY
       group.current.position.z = position[2] + Math.sin(t * 0.13 + position[0] * 0.35) * 0.12
 
       // ── ORIENTATION — vary the bell's tilt like a real drifting bloom instead of a field of upright
       // umbrellas: a deterministic resting pitch/roll per creature + a slow wander, and a lean into the
       // current. A dying stock also tips further over as it sinks (loses its righting control). Kept
       // gentle so the anatomy still reads. rotation.y keeps a slow turn so tentacles trail.
-      const sag = v.sink * 0.5 // sinking stocks list further as they die
+      // sinking stocks list further as they die — righting control fails. Capped so the dome still faces
+      // up-ish (past ~horizontal the silhouette read breaks); 0.8 tips it well over without capsizing.
+      const sag = Math.min(v.sink * 0.8, 0.85)
       group.current.rotation.x = tilt.pitch + Math.sin(t * tilt.wSpeed + seed * 6.28) * 0.12 + sag
       group.current.rotation.z = tilt.roll + curX * 0.15 + Math.cos(t * tilt.wSpeed * 0.8 + seed * 3.1) * 0.1
       group.current.rotation.y = Math.sin(t * 0.15 + seed * 6.28) * 0.22
@@ -360,14 +406,16 @@ export function Jellyfish({ spec, stock, position, selected, dimmed, focal, onSe
             args={[dendrite.nodes, 3]}
           />
         </bufferGeometry>
+        {/* nodes flare a touch larger/brighter (0.05→0.07, 0.5→0.65) so the branch junctions thicken
+            the fan and reinforce the "living mind" read through the now-clearer gel. */}
         <pointsMaterial
           color={spec.tankColor}
-          size={r * 0.05}
+          size={r * 0.07}
           sizeAttenuation
           map={dotTexture()}
           alphaTest={0.01}
           transparent
-          opacity={0.5 * (dimmed ? 0.4 : 1)}
+          opacity={0.65 * (dimmed ? 0.4 : 1)}
           blending={THREE.AdditiveBlending}
           depthWrite={false}
         />

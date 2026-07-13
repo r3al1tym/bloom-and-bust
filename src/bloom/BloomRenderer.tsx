@@ -84,7 +84,9 @@ interface Props {
   spanYears: number
   decade: number
   onDecade: (d: number) => void
-  autoplaying?: boolean
+  playing?: boolean
+  onPlayPause?: () => void
+  onReset?: () => void
   selectedId: string | null
   onSelect: (id: string | null) => void
 }
@@ -99,7 +101,9 @@ export function BloomRenderer({
   spanYears,
   decade,
   onDecade,
-  autoplaying = false,
+  playing = false,
+  onPlayPause,
+  onReset,
   selectedId,
   onSelect,
 }: Props) {
@@ -125,6 +129,22 @@ export function BloomRenderer({
   const controls = useRef<ComponentRef<typeof OrbitControls>>(null)
   const detail = stocks.find((s) => s.id === selectedId) ?? null
 
+  // RESET — snap the camera back to the canonical opening pose and replay the establishing crane, then
+  // reset the timeline to 1950. The camera lives inside the Canvas (CinematicCamera owns it per-frame),
+  // so we reset via the OrbitControls ref + bump replayNonce: CinematicCamera watches the nonce and,
+  // on change, re-captures its base pose from the (now-reset) controls and re-runs the opening crane.
+  const handleReset = () => {
+    const c = controls.current
+    if (c) {
+      c.object.position.set(0, 1.0, 17) // the initial Canvas camera position
+      c.target.set(0, 0, 0)
+      c.update()
+    }
+    onSelect(null) // drop any open caption so the reset frame is the clean opening
+    useBloomControls.setState((s) => ({ replayNonce: s.replayNonce + 1 }))
+    onReset?.()
+  }
+
   // LIGHT AS A CLOCK — publish the continuous clock to the store on every change (autoplay frame OR
   // scrubber drag). These are plain store values with no React subscribers, so writing them per-frame
   // costs no re-render; the per-frame useFrame loops (fog, god-rays, warm plankton, each Jellyfish)
@@ -148,7 +168,7 @@ export function BloomRenderer({
   return (
     <div className="bloom">
       <BloomControlPanel />
-      <div className="bloom-tank">
+      <div className={`bloom-tank${hasSelection ? ' has-selection' : ''}`}>
         <Canvas
           camera={{ position: [0, 1.0, 17], fov: 52 }}
           gl={{ antialias: false, toneMappingExposure: 1.15 }}
@@ -203,13 +223,43 @@ export function BloomRenderer({
             <Noise blendFunction={BlendFunction.OVERLAY} opacity={grain} />
           </EffectComposer>
         </Canvas>
+        {/* orbit affordance — a one-shot whisper that fades itself out after the opening beat (CSS
+            animation, auto-fade), so it's discoverable on load without standing as permanent chrome. */}
         <div className="bloom-hint mono">drag to orbit · scroll to zoom · click a medusa</div>
 
-        {/* CONTINUOUS year scrubber — autoplays a smooth 1950→2018 sweep on load (the tank goes dark on
-            its own), then drag to explore. Fine step so a hand-drag flows like the autoplay, not in
-            decade jumps. The readout is the live year; the caption tells the viewer the dimming light
-            is the fishery's decline, so it never reads as a render bug. */}
-        <div className={`scrubber${autoplaying ? ' is-playing' : ''}`}>
+        {/* CONTINUOUS year scrubber — plays a smooth 1950→2018 sweep on load (the tank goes dark on its
+            own), then drag to explore. Play/pause holds the sweep with the playhead intact; reset
+            returns to 1950 AND snaps the camera back to the opening crane. Fine step so a hand-drag
+            flows like playback, not in decade jumps. */}
+        <div className={`scrubber${playing ? ' is-playing' : ''}`}>
+          <button
+            className="scrubber-btn"
+            onClick={onPlayPause}
+            aria-label={playing ? 'pause' : 'play'}
+            title={playing ? 'Pause' : 'Play'}
+          >
+            {playing ? (
+              <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+                <rect x="6" y="5" width="4" height="14" rx="1" fill="currentColor" />
+                <rect x="14" y="5" width="4" height="14" rx="1" fill="currentColor" />
+              </svg>
+            ) : (
+              <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+                <path d="M8 5.5v13l11-6.5z" fill="currentColor" />
+              </svg>
+            )}
+          </button>
+          <button
+            className="scrubber-btn"
+            onClick={handleReset}
+            aria-label="reset to 1950"
+            title="Reset — year and camera"
+          >
+            <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 12a9 9 0 1 0 3-6.7" />
+              <path d="M3 4v4h4" />
+            </svg>
+          </button>
           <span className="scrubber-decade mono">{year}</span>
           <input
             type="range"
@@ -219,35 +269,39 @@ export function BloomRenderer({
             value={decade}
             onChange={(e) => onDecade(Number(e.target.value))}
             aria-label="year"
+            style={{ ['--fill' as string]: `${(decade / 6) * 100}%` }}
           />
-          <span className="scrubber-hint mono">
-            {autoplaying ? 'the light going out = the fishery’s decline' : 'drag the years · 1950 → 2018'}
-          </span>
+          {playing && (
+            <span className="scrubber-hint">the light going out is the fishery’s decline</span>
+          )}
         </div>
       </div>
 
+      {/* WALL-LABEL — type floating on the water, top-left, no panel. A confident title, one deck line,
+          and the anatomy folded behind a small cue (a gallery label you can open, not a HUD). */}
       <aside className="bloom-side">
-        <div className="bloom-legend">
-          <h1 className="bloom-h1">Bloom &amp; Bust</h1>
-          <p className="bloom-lede">
-            A drift of jellyfish — each one a fish stock of the {region}, {span}. Drag the years and
-            watch the tank thin out as the fisheries fall.
-          </p>
-          <div className="bloom-legend-title mono">Anatomy</div>
+        <h1 className="bloom-h1">Bloom &amp; Bust</h1>
+        <p className="bloom-lede">
+          Each jellyfish is a fish stock of the {region}, {span}. Scrub the years; the tank thins as the
+          fisheries fall.
+        </p>
+        <details className="bloom-anatomy-fold">
+          <summary className="bloom-anatomy-cue mono">Read the bodies</summary>
           <ul className="bloom-anatomy">
-            <li><b>Bell size</b> — the stock's total catch (its mass)</li>
+            <li><b>Bell size</b> — the stock's total catch</li>
             <li><b>Hue</b> — its fate vs its own historical peak</li>
             <li><b>Pulse</b> — <i>thriving</i> breathes slow · <i>declining</i> flutters · a <i>husk</i> is nearly still</li>
-            <li><b>7 tentacles</b> — the seven decades; a <i>stump</i> from the decade the stock collapsed</li>
-            <li><b>Oral arms</b> — length is the share of catch on the official books</li>
+            <li><b>7 tentacles</b> — the seven decades; a <i>stump</i> where it collapsed</li>
+            <li><b>Oral arms</b> — the share of catch on the official books</li>
             <li><b>Stings</b> — dead bycatch discarded at sea</li>
             <li><b>Two-tone</b> — industrial vs small-scale fleet</li>
           </ul>
-          <p className="bloom-outofframe mono">
-            Out of frame: a fish stock produces no sub-artifacts, so the drifting motes stay unlit.
-          </p>
-        </div>
+        </details>
+      </aside>
 
+      {/* the selected-stock memorial + source credit float bottom-right, on the scrim, no box. Pinned
+          bottom-right where the drift is sparser and the centre-forward hero never reaches. */}
+      <div className={`bloom-footer${detail ? ' has-detail' : ''}`}>
         {detail && (
           <div className="bloom-caption">
             <div className="bloom-caption-id mono">{detail.scientific}</div>
@@ -263,12 +317,10 @@ export function BloomRenderer({
             </p>
           </div>
         )}
-
         <p className="bloom-src mono">
-          Data: <a href={sourceUrl} target="_blank" rel="noreferrer">{source}</a>. Rendered
-          client-side with three.js — no server, no cloud at runtime.
+          Data: <a href={sourceUrl} target="_blank" rel="noreferrer">{source}</a> · three.js, client-side.
         </p>
-      </aside>
+      </div>
     </div>
   )
 }

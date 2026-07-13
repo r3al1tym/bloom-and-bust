@@ -1,5 +1,6 @@
-/* Full-bleed: the tank fills the entire stage; the anatomy legend + caption float over it as a
-   translucent dark-glass HUD. The scene is edge-to-edge, no side column eating width. */
+/* Full-bleed: the tank fills the entire stage. There are NO panels — the type floats directly on the
+   water like a gallery wall-label, held legible by a soft type-shadow and a barely-there edge scrim.
+   The scene is edge-to-edge, no chrome boxing it in. */
 .bloom {
   position: relative;
   height: 100vh;
@@ -8,79 +9,189 @@
   overflow: hidden;
 }
 
-/* HUD header inside the floating glass panel */
+:root {
+  --ink: #eef6fa;
+  --cy: 191, 233, 255; /* #bfe4ff as rgb, for alpha */
+  /* the "no box" legibility trick: a tight dark drop + a wide soft dark halo that hugs the glyphs, so
+     light type stays readable when a bright god-ray or pale bell drifts behind it. */
+  --type-shadow: 0 1px 2px rgba(1, 6, 10, 0.55), 0 0 14px rgba(1, 6, 10, 0.7);
+}
+
+/* the wall-label header — the one place to spend type. Uppercase + wide tracking reads as a title
+   sequence, not a dashboard H1. */
 .bloom-h1 {
-  margin: 0 0 8px;
-  font-size: 20px;
-  letter-spacing: -0.01em;
-  color: #eef6fa;
+  margin: 0 0 10px;
+  font-size: 34px;
+  font-weight: 300;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(238, 246, 250, 0.96);
 }
 .bloom-lede {
-  margin: 0 0 18px;
-  font-size: 13px;
-  line-height: 1.5;
-  color: #9fb8c4;
+  margin: 0;
+  max-width: 22em;
+  font-size: 12.5px;
+  font-weight: 400;
+  letter-spacing: 0.03em;
+  line-height: 1.55;
+  color: rgba(var(--cy), 0.62);
 }
+
+/* anatomy folded behind a small cue — native <details>, keyboard-accessible, no box */
+.bloom-anatomy-fold {
+  margin-top: 16px;
+}
+.bloom-anatomy-cue {
+  display: inline-block;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(var(--cy), 0.5);
+  cursor: pointer;
+  list-style: none;
+  transition: color 0.15s ease;
+}
+.bloom-anatomy-cue::-webkit-details-marker {
+  display: none;
+}
+.bloom-anatomy-cue:hover {
+  color: rgba(var(--cy), 0.8);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.bloom-anatomy-fold[open] .bloom-anatomy-cue {
+  color: var(--ink);
+  margin-bottom: 12px;
+}
+
 .bloom-src {
-  margin-top: 18px;
-  padding-top: 14px;
-  border-top: 1px solid rgba(191, 233, 255, 0.12);
-  font-size: 11px;
+  margin: 10px 0 0;
+  font-size: 10px;
   line-height: 1.5;
-  color: rgba(191, 233, 255, 0.5);
+  color: rgba(var(--cy), 0.38);
 }
 .bloom-src a {
-  color: rgba(191, 233, 255, 0.7);
+  color: rgba(var(--cy), 0.6);
   text-decoration: underline;
 }
 
-/* decade scrubber — floating pill, bottom-center over the tank */
+/* decade scrubber — no pill. The year is the piece's clock, bottom-left, sitting on the scrim; the
+   track is a bare full-width hairline; the play/reset buttons sit inline before the year. */
 .scrubber {
   position: absolute;
-  left: 50%;
-  bottom: 24px;
-  transform: translateX(-50%);
+  left: 28px;
+  right: 28px;
+  bottom: 26px;
   z-index: 3;
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 10px 18px;
-  border: 1px solid rgba(191, 233, 255, 0.16);
-  border-radius: 999px;
-  background: rgba(6, 19, 26, 0.62);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  gap: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  text-shadow: var(--type-shadow);
+}
+/* bare icon buttons — no pill, just the glyph floating on the water, brightening on hover */
+.scrubber-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: rgba(238, 246, 250, 0.7);
+  cursor: pointer;
+  transition: color 0.15s ease, transform 0.1s ease;
+}
+.scrubber-btn:hover {
+  color: #79e0a6;
+}
+.scrubber-btn:active {
+  transform: scale(0.9);
+}
+.scrubber-btn:focus-visible {
+  outline: 1px solid rgba(121, 224, 166, 0.6);
+  outline-offset: 3px;
+  border-radius: 50%;
 }
 .scrubber-decade {
-  font-size: 15px;
-  font-weight: 600;
-  color: #eef6fa;
-  min-width: 3.4em;
+  font-size: 30px;
+  font-weight: 300;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  letter-spacing: 0;
+  min-width: 2.6em;
 }
+/* the autoplay whisper — lifted out of the flex row and centred above the track so it never collides
+   with the year clock or the footer credit. */
 .scrubber-hint {
-  font-size: 10.5px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: rgba(191, 233, 255, 0.5);
+  position: absolute;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%);
+  font-size: 11px;
+  font-style: italic;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: rgba(var(--cy), 0.45);
+  white-space: nowrap;
+  pointer-events: none;
 }
+/* bare hairline track — the played portion tints thriving-green so the control echoes the data */
 .scrubber input[type='range'] {
-  width: 240px;
-  accent-color: #79e0a6;
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 1;
+  height: 1px;
+  /* played portion in thriving-green (up to --fill), unplayed a faint cyan hairline */
+  background: linear-gradient(
+    to right,
+    rgba(121, 224, 166, 0.7) 0%,
+    rgba(121, 224, 166, 0.7) var(--fill, 0%),
+    rgba(var(--cy), 0.18) var(--fill, 0%),
+    rgba(var(--cy), 0.18) 100%
+  );
+  border-radius: 0;
+  cursor: pointer;
+}
+.scrubber input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 10px;
+  height: 10px;
+  border: none;
+  border-radius: 50%;
+  background: var(--ink);
+  box-shadow: 0 0 6px rgba(1, 6, 10, 0.6);
+  cursor: pointer;
+}
+.scrubber input[type='range']::-moz-range-thumb {
+  width: 10px;
+  height: 10px;
+  border: none;
+  border-radius: 50%;
+  background: var(--ink);
+  box-shadow: 0 0 6px rgba(1, 6, 10, 0.6);
+  cursor: pointer;
 }
 @media (max-width: 720px) {
   .bloom-side {
-    width: calc(100% - 36px);
-    max-height: 40%;
-  }
-  .scrubber input[type='range'] {
-    width: 150px;
+    width: calc(100% - 56px);
   }
   .scrubber-hint {
     display: none;
   }
+  .scrubber-decade {
+    font-size: 24px;
+  }
 }
 
-/* The tank is the one self-contained dark surface in an otherwise warm app — now the whole stage. */
+/* The tank is the whole stage. */
 .bloom-tank {
   position: absolute;
   inset: 0;
@@ -92,60 +203,68 @@
   height: 100% !important;
   touch-action: none;
 }
-.bloom-hint {
+/* EDGE SCRIM — the only "background" in the piece: a barely-there darkening that bleeds up from the
+   top and bottom edges (where the type lives), under all UI, never boxing anything. The god-ray band
+   and the hero medusa in the mid-frame stay perfectly clear. Deepens along the bottom while a stock
+   is selected so the memorial caption holds contrast even when a pale bell drifts behind it. */
+.bloom-tank::after {
+  content: '';
   position: absolute;
-  left: 20px;
-  bottom: 16px;
-  z-index: 2;
-  font-size: 10.5px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: rgba(191, 233, 255, 0.55);
+  inset: 0;
   pointer-events: none;
+  z-index: 1;
+  background:
+    linear-gradient(to bottom, rgba(2, 8, 14, 0.42) 0%, rgba(2, 8, 14, 0) 26%),
+    linear-gradient(to top, rgba(2, 8, 14, 0.5) 0%, rgba(2, 8, 14, 0) 22%);
+  transition: opacity 0.3s ease;
+}
+.bloom-tank.has-selection::after {
+  background:
+    linear-gradient(to bottom, rgba(2, 8, 14, 0.42) 0%, rgba(2, 8, 14, 0) 26%),
+    linear-gradient(to top, rgba(2, 8, 14, 0.62) 0%, rgba(2, 8, 14, 0) 28%);
 }
 
-/* floating glass HUD over the scene — dark, translucent, backdrop-blurred, light text so it reads
-   on the deep water without boxing the scene into a column */
+/* orbit affordance — a one-shot whisper, centred-low, that fades itself out after the opening beat */
+.bloom-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 70px;
+  transform: translateX(-50%);
+  z-index: 2;
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: rgba(var(--cy), 0.4);
+  text-shadow: var(--type-shadow);
+  pointer-events: none;
+  animation: bloom-hint-fade 8s ease-out forwards;
+}
+@keyframes bloom-hint-fade {
+  0%, 55% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* WALL-LABEL — type on the water, top-left, no box. pointer-events off except the interactive cue/link
+   so a click on empty label space still falls through to deselect a medusa. */
 .bloom-side {
   position: absolute;
-  top: 18px;
-  right: 18px;
+  top: 26px;
+  left: 28px;
   z-index: 2;
-  width: 320px;
-  max-height: calc(100% - 36px);
-  overflow-y: auto;
-  padding: 20px 20px;
-  border: 1px solid rgba(191, 233, 255, 0.14);
-  border-radius: 14px;
-  background: rgba(6, 19, 26, 0.58);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
-  color: #cfe3ec;
-  /* thin, dark, barely-visible scrollbar to match the deep-water scene (Firefox) */
-  scrollbar-width: thin;
-  scrollbar-color: rgba(191, 233, 255, 0.14) transparent;
+  width: min(30ch, 40vw);
+  padding: 0;
+  border: none;
+  background: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: none;
+  color: var(--ink);
+  text-shadow: var(--type-shadow);
+  pointer-events: none;
 }
-/* WebKit/Blink — 4px, dark, low-contrast track + thumb */
-.bloom-side::-webkit-scrollbar {
-  width: 4px;
-}
-.bloom-side::-webkit-scrollbar-track {
-  background: transparent;
-}
-.bloom-side::-webkit-scrollbar-thumb {
-  background: rgba(191, 233, 255, 0.14);
-  border-radius: 4px;
-}
-.bloom-side::-webkit-scrollbar-thumb:hover {
-  background: rgba(191, 233, 255, 0.28);
-}
-.bloom-legend-title {
-  font-size: 11px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: rgba(191, 233, 255, 0.62);
-  margin-bottom: 12px;
+.bloom-side .bloom-anatomy-cue,
+.bloom-side a {
+  pointer-events: auto;
 }
 .bloom-anatomy {
   list-style: none;
@@ -154,50 +273,63 @@
   display: flex;
   flex-direction: column;
   gap: 9px;
+  animation: bloom-fold-in 0.24s ease-out;
+}
+@keyframes bloom-fold-in {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: none; }
 }
 .bloom-anatomy li {
-  font-size: 13px;
-  line-height: 1.4;
-  color: #b9d2dd;
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgba(var(--cy), 0.55);
 }
 .bloom-anatomy b {
-  color: #eef6fa;
+  color: var(--ink);
   font-weight: 600;
 }
 .bloom-anatomy i {
   font-style: italic;
-  color: rgba(191, 233, 255, 0.6);
-}
-.bloom-outofframe {
-  margin-top: 16px;
-  padding-top: 14px;
-  border-top: 1px solid rgba(191, 233, 255, 0.12);
-  font-size: 11px;
-  line-height: 1.5;
-  color: rgba(191, 233, 255, 0.5);
+  color: rgba(var(--cy), 0.72);
 }
 
+/* memorial caption + credit — floats bottom-right on the scrim, no box. Sits ABOVE the scrubber line
+   (bottom: 64px) so it never collides with the year clock / track / playback hint on the bottom row. */
+.bloom-footer {
+  position: absolute;
+  right: 28px;
+  bottom: 64px;
+  z-index: 2;
+  width: min(34ch, 42vw);
+  text-align: right;
+  color: var(--ink);
+  text-shadow: var(--type-shadow);
+  pointer-events: none;
+}
+.bloom-footer a {
+  pointer-events: auto;
+}
 .bloom-caption {
-  margin-top: 22px;
-  padding-top: 20px;
-  border-top: 1px solid rgba(191, 233, 255, 0.12);
+  margin-bottom: 16px;
+  animation: bloom-fold-in 0.26s ease-out;
 }
 .bloom-caption-id {
-  font-size: 11px;
-  letter-spacing: 0.08em;
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: rgba(191, 233, 255, 0.6);
+  color: rgba(var(--cy), 0.55);
 }
 .bloom-caption-title {
-  font-size: 18px;
+  font-size: 22px;
+  font-weight: 300;
   line-height: 1.3;
-  margin: 8px 0 14px;
-  color: #eef6fa;
+  margin: 6px 0 12px;
+  color: var(--ink);
 }
 .bloom-caption-status {
   font-size: 14px;
-  line-height: 1.55;
-  color: #c4dae4;
+  line-height: 1.6;
+  color: rgba(196, 218, 228, 0.9);
 }
 .bloom-violations {
   margin: 14px 0 0;
