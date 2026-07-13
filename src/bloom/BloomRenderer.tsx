@@ -27,26 +27,48 @@ import { BloomControlPanel } from './BloomControlPanel'
 import type { Stock } from '@/data/bloom'
 import './bloom.css'
 
-// Compose the bloom as a PORTFOLIO, not a portrait: the hero (a thriving survivor) centered and
-// forward — the lone lantern — the rest in a loose depth-staggered arc so camera-Z varies and the
-// layered front-to-back translucency reads. Deterministic — no Math.random.
+// Compose the bloom as a DRIFT the eye can read creature-by-creature — not the tight two-ring cram
+// that made 28 large bells overlap into an unreadable clump. A Fibonacci (golden-angle) distribution
+// projected into a wide, shallow ellipsoidal volume gives even, organic, NON-overlapping spacing so
+// every stock is individually legible and the hue pattern (green survivors vs coral/slate husks)
+// reads at a glance. Deterministic — no Math.random.
+//
+// The volume is WIDE in X (fills a cinematic frame), moderate in Y, and generous in Z so the
+// front-to-back translucency + fog depth still read; the hero sits alone, forward and centred, as
+// the lone lantern the camera cranes to.
 function layout(specs: BloomSpec[]): [number, number, number][] {
   const n = specs.length
-  // hero = a thriving stock if any survive; else the biggest bell (most catch)
+  // hero = a thriving survivor if any (the lone green lantern); else the biggest bell (most catch)
   let heroIdx = specs.findIndex((s) => s.vitality === 'sealed')
   if (heroIdx < 0) heroIdx = specs.reduce((best, s, i) => (s.bellRadius > specs[best].bellRadius ? i : best), 0)
+
   const out: [number, number, number][] = new Array(n)
-  out[heroIdx] = [0, -0.3, 2.2] // center, slightly forward and low
+  out[heroIdx] = [0, -0.2, 3.2] // centre, forward and slightly low — the subject the crane lands on
+
   const others = specs.map((_, i) => i).filter((i) => i !== heroIdx)
-  const count = others.length
+  const m = others.length
+  const GOLDEN = Math.PI * (3 - Math.sqrt(5)) // golden angle ≈ 2.399963 rad — even angular spread
+  // half-axes of the drift ellipsoid (world units). WIDE + shallow-tall + deep for a big legible field.
+  const RX = 13.5
+  const RY = 7.0
+  const RZ = 8.5
   others.forEach((idx, k) => {
-    const ring = k % 2 === 0 ? 0 : 1
-    const perRing = Math.ceil(count / 2)
-    const a = ((k >> 1) / Math.max(perRing, 1)) * Math.PI * 2 + (ring ? 0.5 : 0)
-    const rad = ring ? 6.4 : 4.4
-    const x = Math.cos(a) * rad
-    const y = Math.sin(a) * rad * 0.62 + (ring ? 0.4 : -0.2)
-    const z = -1.5 - ring * 3.5 - ((k * 7) % 3)
+    // Fibonacci-sphere point: cosθ walks evenly down [-1,1], φ advances by the golden angle. This is
+    // the classic even-point-on-a-sphere construction — no clustering, no seams, fully deterministic.
+    const t = (k + 0.5) / m
+    const cosPol = 1 - 2 * t // -1..1
+    const sinPol = Math.sqrt(Math.max(0, 1 - cosPol * cosPol))
+    const phi = k * GOLDEN
+    const ux = Math.cos(phi) * sinPol
+    const uy = cosPol
+    const uz = Math.sin(phi) * sinPol
+    // A gentle deterministic radial jitter so it reads as an organic drift, not a taut shell.
+    const rj = 0.82 + 0.18 * Math.sin(k * 1.7 + 0.5)
+    const x = ux * RX * rj
+    // bias the field a touch downward so the forward hero reads as rising above the drift
+    const y = uy * RY * rj - 0.6
+    // keep the whole field behind the hero plane (hero at z=3.2) so it never occludes the subject
+    const z = uz * RZ * rj - 2.0
     out[idx] = [x, y, z]
   })
   return out
@@ -61,6 +83,7 @@ interface Props {
   decades: string[]
   decade: number
   onDecade: (d: number) => void
+  autoplaying?: boolean
   selectedId: string | null
   onSelect: (id: string | null) => void
 }
@@ -74,6 +97,7 @@ export function BloomRenderer({
   decades,
   decade,
   onDecade,
+  autoplaying = false,
   selectedId,
   onSelect,
 }: Props) {
@@ -96,7 +120,7 @@ export function BloomRenderer({
       <BloomControlPanel />
       <div className="bloom-tank">
         <Canvas
-          camera={{ position: [0, 0.5, 11], fov: 50 }}
+          camera={{ position: [0, 1.0, 17], fov: 52 }}
           gl={{ antialias: false, toneMappingExposure: 1.15 }}
           dpr={[1, 1.75]}
           onPointerMissed={() => onSelect(null)}
@@ -111,7 +135,7 @@ export function BloomRenderer({
             ref={controls}
             enablePan={false}
             minDistance={5}
-            maxDistance={28}
+            maxDistance={40}
             enableDamping
             dampingFactor={0.08}
             target={[0, 0, 0]}
@@ -148,8 +172,8 @@ export function BloomRenderer({
         </Canvas>
         <div className="bloom-hint mono">drag to orbit · scroll to zoom · click a medusa</div>
 
-        {/* decade scrubber — drag through 70 years and watch the tank go dark */}
-        <div className="scrubber">
+        {/* decade scrubber — autoplays on load (the tank goes dark on its own), then drag to explore */}
+        <div className={`scrubber${autoplaying ? ' is-playing' : ''}`}>
           <span className="scrubber-decade mono">{decades[decade]}</span>
           <input
             type="range"
@@ -159,7 +183,7 @@ export function BloomRenderer({
             onChange={(e) => onDecade(Number(e.target.value))}
             aria-label="decade"
           />
-          <span className="scrubber-hint mono">drag the years</span>
+          <span className="scrubber-hint mono">{autoplaying ? 'playing 1950 → 2018 · drag to explore' : 'drag the years'}</span>
         </div>
       </div>
 
@@ -292,9 +316,13 @@ function CinematicCamera({ controls }: { controls: RefObject<ComponentRef<typeof
     const drawIn = establishing ? 1 - Math.exp(-t / 1.75) : 1
 
     const START_POL = 0.42
-    const START_RAD_MUL = 1.6
+    const START_RAD_MUL = 1.45
     const START_AZ_OFF = 0.7
-    const HERO_RAD_MUL = establishing ? 0.78 : 1.0
+    // Settle FARTHER than the origin's 0.78 crowd-in: the drift is now a wide 28-creature field, so the
+    // hero-landing frame must keep the whole bloom legible (green survivors vs coral/slate husks reading
+    // across the frame) rather than filling the view with a few foreground bells. 0.98 = a gentle
+    // draw-in that still lands on the hero without crowding out the data pattern.
+    const HERO_RAD_MUL = establishing ? 0.98 : 1.0
     const START = authored
       ? camStart!
       : { az: b.az + START_AZ_OFF, pol: Math.min(b.pol, START_POL), rad: b.rad * START_RAD_MUL }

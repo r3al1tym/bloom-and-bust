@@ -272,14 +272,17 @@ export const swayFragment = /* glsl */ `
   varying float vFogDepth;
   ${FOG}
   void main() {
-    // Pale luminous nettle trail (per the reference photo): the outcome hue stays saturated near the
-    // anchor where the datum reads, then blends toward a warm pale pink-white along the length so the
-    // flowing tips glow like real tentacles, not colored wires. Brighter near the anchor.
-    float glow = mix(1.0, 0.15, vT);
-    vec3 pale = vec3(1.0, 0.86, 0.84);     // the reference's pink-white
-    vec3 tint = mix(uColor, pale, smoothstep(0.05, 0.8, vT) * 0.8);
-    vec3 col = tint * (0.6 + 0.8 * glow);
-    float a = uOpacity * (0.85 - 0.35 * vT);
+    // ONE CREATURE, ONE COLOUR. The trail stays the stock's own fate hue along its whole length, so a
+    // coral stock reads coral tentacles and a slate husk dim-slate — the bell and its trail are the
+    // SAME animal. (Was: a blend toward pink-white that decoupled the tips from the bell — the
+    // "head colour ≠ tentacle colour when zoomed out" bug.) Only a faint LUMINANCE lift near the tips
+    // keeps the flow alive, never a hue swap. Kept low so many additive trails sum to a translucent
+    // COLOURED haze, not a white blowout.
+    float glow = mix(1.0, 0.28, vT);
+    vec3 lift = uColor + vec3(0.08, 0.10, 0.10);          // same hue, a touch brighter — never white
+    vec3 tint = mix(uColor, lift, smoothstep(0.15, 0.9, vT) * 0.4);
+    vec3 col = tint * (0.42 + 0.5 * glow);
+    float a = uOpacity * (0.72 - 0.4 * vT);
     if (uAdvisory > 0.5) {                 // DT: visibly not load-bearing
       col = mix(col, vec3(dot(col, vec3(0.33))), 0.55);
       a *= 0.4;

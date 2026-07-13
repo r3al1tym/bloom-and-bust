@@ -53,6 +53,9 @@ export interface BloomSpec {
   title: string
   tier: string
   bellRadius: number
+  /** This-decade survival (0.34..1): the whole creature is scaled by it so the tank visibly thins as
+   *  stocks collapse. Applied as a smooth group scale in Jellyfish, not baked into the geometry. */
+  decadeScale: number
   /** Steady inner glow 0..1. Here: how close the stock is to its historical peak (thriving = 1). */
   glow: number
   vitality: Vitality
@@ -132,6 +135,15 @@ export function buildBloom(stocks: Stock[], decade = 6): BloomSpec[] {
     const hue = FATE_COLOR[fate]
     const tankColor = TANK_TINT[fate]
 
+    // TEMPORAL MASS — the bell shrinks as the stock collapses. Cross-stock scale still reads (a big
+    // stock is a big creature via s.size, log lifetime tonnage), but each bell is then scaled by how
+    // much of its OWN peak survives at THIS decade (glow = now/peak). So scrubbing forward genuinely
+    // EMPTIES the tank — a husk shrivels to ~a third of its peak footprint instead of hanging on as a
+    // big recoloured dome. Floored at 0.34 so a collapsed stock still reads as a (small, dim) creature
+    // rather than vanishing (vanishing would erase the datum). This is the change that makes the
+    // collapse feel like loss, not a palette swap.
+    const decadeScale = 0.34 + 0.66 * glow
+
     const tentacles: TentacleSpec[] = DECADES.map((d, i) => ({
       stage: d,
       color: hue,
@@ -151,7 +163,8 @@ export function buildBloom(stocks: Stock[], decade = 6): BloomSpec[] {
       id: s.id,
       title: s.name,
       tier: s.group,
-      bellRadius: 0.5 + s.size * 0.9, // log-tonnage mass → readable bell radius
+      bellRadius: 0.5 + s.size * 0.9, // log-tonnage lifetime mass → readable bell radius (geometry base)
+      decadeScale, // this-decade survival multiplier — applied as a SMOOTH group scale (not geometry)
       glow,
       vitality: VITALITY_OF[fate],
       engWeight: s.industrialShare, // two-tone: industrial vs small-scale fleet

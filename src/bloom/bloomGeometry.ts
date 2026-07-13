@@ -173,9 +173,9 @@ export function makeMarineSnow(count: number, seed = 7): {
     return s / 0x7fffffff
   }
   for (let i = 0; i < count; i++) {
-    pos[i * 3] = (rnd() - 0.5) * 26
-    pos[i * 3 + 1] = (rnd() - 0.5) * 20
-    pos[i * 3 + 2] = (rnd() - 0.5) * 16
+    pos[i * 3] = (rnd() - 0.5) * 38     // widened to blanket the wide drift field (layout RX≈13.5)
+    pos[i * 3 + 1] = (rnd() - 0.5) * 24
+    pos[i * 3 + 2] = (rnd() - 0.5) * 20
     sizes[i] = 0.02 + rnd() * 0.06
   }
   return { positions: pos, sizes }

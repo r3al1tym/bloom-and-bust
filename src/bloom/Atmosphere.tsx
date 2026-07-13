@@ -99,7 +99,11 @@ function MarineSnow({
     // circle: near points crossed pixels fast and, being sub-pixel additive with no MSAA, twinkled
     // hard across the whole frame — the "flickering/clipping" read. Translating instead keeps each
     // point's screen motion slow and coherent.
-    ref.current.position.y = -((t * driftY) % span)
+    // wrap over `span` in whichever direction driftY points (negative = rising plankton). JS `%` keeps
+    // the sign of the dividend, so add `span` before the final mod to guarantee a [0,span) offset —
+    // otherwise a negative driftY would jump instead of looping seamlessly.
+    const off = (((t * driftY) % span) + span) % span
+    ref.current.position.y = driftY >= 0 ? -off : off - span
     ref.current.position.x = Math.sin(t * spin * 6.0) * 0.4
   })
   return (
@@ -129,17 +133,24 @@ export function Atmosphere() {
       {/* God-light from the surface far above — steep, near-vertical shafts raking DOWN through the
           water column into the depths, tinted deep-ocean cyan, catching the particulate. Spread
           across depth (some in front of the drift, some behind) so the volumetric light reads and
-          the DoF turns the near ones into soft glowing columns. */}
-      <GodRay x={-7} y={8} z={2} rot={0.1} seed={0.1} w={4} h={34} color="#5aa6c4" />
-      <GodRay x={-3} y={8} z={-3} rot={0.06} seed={0.5} w={6} h={36} color="#78c4dc" />
-      <GodRay x={2} y={8} z={4} rot={0.12} seed={0.8} w={3.5} h={32} color="#8fd4e6" />
-      <GodRay x={5} y={8} z={-2} rot={0.05} seed={0.3} w={5} h={34} color="#8fd4e6" />
-      <GodRay x={9} y={8} z={1} rot={0.09} seed={0.65} w={4} h={32} color="#5aa6c4" />
-      <GodRay x={0} y={8} z={-8} rot={0.04} seed={0.42} w={9} h={38} color="#4a94b2" />
-      {/* suspended particulate — TRANSLATES gently (no rigid rotation). Sizes kept above sub-pixel so
-          points don't twinkle without MSAA: fine near layer + coarse far motes. */}
-      <MarineSnow count={800} size={0.08} color="#9fc7d6" opacity={0.3} driftY={0.15} spin={0.05} span={20} />
-      <MarineSnow count={140} size={0.16} color="#bfe9ff" opacity={0.5} driftY={0.07} spin={-0.04} span={26} />
+          the DoF turns the near ones into soft glowing columns. Widened to span the new wide drift
+          field and brightened back toward the "lived-in" look (the earlier white-clip retune leaned
+          on lower bloomIntensity/threshold + fog — not on starving the shafts, so this is safe). */}
+      <GodRay x={-13} y={9} z={2} rot={0.11} seed={0.1} w={5} h={38} color="#6fbcd6" />
+      <GodRay x={-7} y={9} z={-3} rot={0.07} seed={0.5} w={7} h={40} color="#8ccfe6" />
+      <GodRay x={-2} y={9} z={5} rot={0.12} seed={0.8} w={4} h={36} color="#a6e0f0" />
+      <GodRay x={3} y={9} z={-2} rot={0.06} seed={0.3} w={6} h={38} color="#a6e0f0" />
+      <GodRay x={8} y={9} z={2} rot={0.09} seed={0.65} w={5} h={36} color="#6fbcd6" />
+      <GodRay x={13} y={9} z={-1} rot={0.1} seed={0.22} w={4.5} h={36} color="#5aa6c4" />
+      <GodRay x={0} y={9} z={-9} rot={0.04} seed={0.42} w={11} h={44} color="#5299b6" />
+      {/* Suspended particulate — TRANSLATES gently (no rigid rotation). Sizes kept above sub-pixel so
+          points don't twinkle without MSAA. Three layers now: a dense fine haze, coarse bokeh motes,
+          and a slow RISING plankton layer (negative driftY → drifts UP) so the water reads as a moving
+          column the creatures climb through — reinforcing the vertical pulse-glide. Densities/opacity
+          restored toward the lived-in look; still additive-low so they never sum to a white veil. */}
+      <MarineSnow count={1300} size={0.075} color="#9fc7d6" opacity={0.34} driftY={0.16} spin={0.05} span={22} />
+      <MarineSnow count={220} size={0.16} color="#c6ecff" opacity={0.55} driftY={0.06} spin={-0.04} span={28} />
+      <MarineSnow count={340} size={0.055} color="#bfe4d8" opacity={0.28} driftY={-0.11} spin={0.03} span={24} />
     </>
   )
 }

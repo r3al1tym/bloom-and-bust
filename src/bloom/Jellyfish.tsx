@@ -202,14 +202,36 @@ export function Jellyfish({ spec, position, selected, dimmed, onSelect }: Props)
       // over each creature's own deterministic bob so the bloom breathes like a single body of water.
       const curX = Math.sin(t * 0.18 + position[0] * 0.25) * 0.18 + Math.sin(t * 0.11 + position[2] * 0.3) * 0.1
       const curY = Math.cos(t * 0.15 + position[0] * 0.2) * 0.12
+
+      // ── VERTICAL PULSE-GLIDE — real medusa locomotion, WITHOUT scattering the legible layout. A
+      // jellyfish jets UP on the contraction and settles on the relaxation, so its motion is a
+      // rhythmic ratchet synced to the bell pulse (same phase as bloomShaders.bellVertex), not a
+      // lava-lamp float. It stays anchored near its data position (so each stock stays identifiable);
+      // the kick amplitude + a slow bounded ascent-and-return read as VITALITY: a thriving stock
+      // (fast, deep pulse) climbs eagerly, a husk barely twitches. The whole-drift "rising through the
+      // shafts" documentary read comes from the camera crane + falling marine snow, not from creatures
+      // migrating across the frame.
+      const pulsePhase = t * pulse.rate + seed * 6.2831853
+      const ps = Math.sin(pulsePhase)
+      // asymmetric thrust: fast up-kick on contraction (ps>0), slower settle on relaxation — matches
+      // the bell's own skewed jet so body and motion agree.
+      const thrust = ps > 0 ? Math.pow(ps, 0.6) : -Math.pow(-ps, 1.6) * 0.5
+      const vigor = 0.35 + 1.4 * spec.alive // husk ~0.4, hero ~1.6 — vitality = how hard it climbs
+      const kick = thrust * pulse.depth * vigor * 2.2 // per-pulse vertical excursion (stays local)
+      // a slow, BOUNDED ascent-and-return (±~0.6·vigor world units) so a lively creature visibly works
+      // its way up and drifts back down — migration, but tethered to its home so the arrangement holds.
+      const glide = Math.sin(t * (0.12 + 0.06 * spec.alive) + seed * 6.28) * 0.6 * vigor
+
       group.current.position.x = position[0] + curX
-      group.current.position.y = position[1] + curY + Math.sin(t * 0.4 + seed * 6.28) * 0.12
+      group.current.position.y = position[1] + curY + glide + kick
       group.current.position.z = position[2] + Math.sin(t * 0.13 + position[0] * 0.35) * 0.12
       group.current.rotation.z = curX * 0.15 // lean into the current
       group.current.rotation.y = Math.sin(t * 0.15 + seed * 6.28) * 0.22
-      const s = selected ? 1.12 : 1
+      // whole-creature scale = this-decade survival (the tank thins as stocks collapse) × a small
+      // selection pop. Eased smoothly so scrubbing a stock into collapse SHRINKS it before your eyes.
+      const s = spec.decadeScale * (selected ? 1.12 : 1)
       const cs = group.current.scale.x
-      group.current.scale.setScalar(cs + (s - cs) * Math.min(1, dt * 5))
+      group.current.scale.setScalar(cs + (s - cs) * Math.min(1, dt * 3))
 
       // DEPTH-RANKED DRAW ORDER — the parts are all depthWrite:false (translucent, so the brain reads
       // through the gel and far bells sink into the fog), which means NO depth-buffer occlusion between
