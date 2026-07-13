@@ -1,7 +1,9 @@
 # Medusa Bloom
 
-A drift of jellyfish, each one a fish stock of the Northeast Atlantic. Drag through 70 years
-(1950–2018) and watch the tank go dark as the fisheries collapse.
+A drift of jellyfish, each one a fish stock of the Northeast Atlantic. On load it plays itself —
+a slow, continuous sweep from 1950 to 2018 — and you watch the tank fill green then go dark as the
+fisheries collapse, the surface light failing and the dead stocks sinking into the deep. Grab the
+scrubber any time to drive the years yourself.
 
 Every jellyfish is one species. Its body is the data:
 
