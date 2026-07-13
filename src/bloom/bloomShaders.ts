@@ -219,17 +219,23 @@ export const bellFragment = /* glsl */ `
 
     // NormalBlending; density scales with aliveness so a husk stays wispy and a sealed bell is
     // dense — but the apex stays translucent (lower center alpha) so the neural mind reads through
-    // the gel, while the frilled margin/edges stay glassy-bright.
-    float apexClear = 1.0 - vHeight * 0.32;      // thinner, clearer over the brain
-    float a = uOpacity * (0.22 + 0.42 * uAlive + 0.4 * (rimT + rimB) * 0.5 + uGlow * 0.10 + vFrill * 0.12) * apexClear;
+    // the gel, while the frilled margin/edges stay glassy-bright. Raised the BODY-fill floor (0.22→
+    // 0.34) so the dome carries its hue as a coloured membrane, not a near-clear glass — at distance
+    // the low floor made the head wash out to nothing while the additive tentacles kept their colour
+    // (the "head clear, tentacles coloured until you get close" bug).
+    float apexClear = 1.0 - vHeight * 0.28;      // thinner, clearer over the brain
+    float a = uOpacity * (0.34 + 0.4 * uAlive + 0.35 * (rimT + rimB) * 0.5 + uGlow * 0.10 + vFrill * 0.12) * apexClear;
 
     // atmospheric perspective: fade the body toward the water haze with distance so far medusae sink
-    // INTO the medium instead of floating sharp on top of it. Colour mixes toward fog; alpha eases
-    // down a touch so the silhouette also softens into the water.
+    // INTO the medium. BUT the colour must survive the fade or the head reads as a clear dome next to
+    // its still-coloured (additive) tentacles. So: mix toward a HUE-TINTED haze (fog colour lifted
+    // toward the body hue), and soften the alpha fade (0.55→0.35) to match the tentacles' 0.5 colour
+    // attenuation — head and trail now recede together, both keeping their colour.
     float fog = fogFactor(vFogDepth);
-    col = mix(col, FOG_COLOR, fog);
-    a *= (1.0 - 0.55 * fog);
-    gl_FragColor = vec4(col, clamp(a, 0.0, 0.94));
+    vec3 hazeTint = mix(FOG_COLOR, body, 0.35);  // fog that still carries the creature's colour
+    col = mix(col, hazeTint, fog * 0.8);
+    a *= (1.0 - 0.35 * fog);
+    gl_FragColor = vec4(col, clamp(a, 0.0, 0.96));
   }
 `
 
