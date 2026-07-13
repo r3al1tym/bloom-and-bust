@@ -1,0 +1,213 @@
+/* Full-bleed: the tank fills the entire stage; the anatomy legend + caption float over it as a
+   translucent dark-glass HUD. The scene is edge-to-edge, no side column eating width. */
+.bloom {
+  position: relative;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* HUD header inside the floating glass panel */
+.bloom-h1 {
+  margin: 0 0 8px;
+  font-size: 20px;
+  letter-spacing: -0.01em;
+  color: #eef6fa;
+}
+.bloom-lede {
+  margin: 0 0 18px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #9fb8c4;
+}
+.bloom-src {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(191, 233, 255, 0.12);
+  font-size: 11px;
+  line-height: 1.5;
+  color: rgba(191, 233, 255, 0.5);
+}
+.bloom-src a {
+  color: rgba(191, 233, 255, 0.7);
+  text-decoration: underline;
+}
+
+/* decade scrubber — floating pill, bottom-center over the tank */
+.scrubber {
+  position: absolute;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 18px;
+  border: 1px solid rgba(191, 233, 255, 0.16);
+  border-radius: 999px;
+  background: rgba(6, 19, 26, 0.62);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+.scrubber-decade {
+  font-size: 15px;
+  font-weight: 600;
+  color: #eef6fa;
+  min-width: 3.4em;
+}
+.scrubber-hint {
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(191, 233, 255, 0.5);
+}
+.scrubber input[type='range'] {
+  width: 240px;
+  accent-color: #79e0a6;
+}
+@media (max-width: 720px) {
+  .bloom-side {
+    width: calc(100% - 36px);
+    max-height: 40%;
+  }
+  .scrubber input[type='range'] {
+    width: 150px;
+  }
+  .scrubber-hint {
+    display: none;
+  }
+}
+
+/* The tank is the one self-contained dark surface in an otherwise warm app — now the whole stage. */
+.bloom-tank {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(120% 120% at 50% 30%, #0c2230 0%, #06141b 70%, #030a0e 100%);
+}
+.bloom-tank canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+  touch-action: none;
+}
+.bloom-hint {
+  position: absolute;
+  left: 20px;
+  bottom: 16px;
+  z-index: 2;
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(191, 233, 255, 0.55);
+  pointer-events: none;
+}
+
+/* floating glass HUD over the scene — dark, translucent, backdrop-blurred, light text so it reads
+   on the deep water without boxing the scene into a column */
+.bloom-side {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  z-index: 2;
+  width: 320px;
+  max-height: calc(100% - 36px);
+  overflow-y: auto;
+  padding: 20px 20px;
+  border: 1px solid rgba(191, 233, 255, 0.14);
+  border-radius: 14px;
+  background: rgba(6, 19, 26, 0.58);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+  color: #cfe3ec;
+  /* thin, dark, barely-visible scrollbar to match the deep-water scene (Firefox) */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(191, 233, 255, 0.14) transparent;
+}
+/* WebKit/Blink — 4px, dark, low-contrast track + thumb */
+.bloom-side::-webkit-scrollbar {
+  width: 4px;
+}
+.bloom-side::-webkit-scrollbar-track {
+  background: transparent;
+}
+.bloom-side::-webkit-scrollbar-thumb {
+  background: rgba(191, 233, 255, 0.14);
+  border-radius: 4px;
+}
+.bloom-side::-webkit-scrollbar-thumb:hover {
+  background: rgba(191, 233, 255, 0.28);
+}
+.bloom-legend-title {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(191, 233, 255, 0.62);
+  margin-bottom: 12px;
+}
+.bloom-anatomy {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.bloom-anatomy li {
+  font-size: 13px;
+  line-height: 1.4;
+  color: #b9d2dd;
+}
+.bloom-anatomy b {
+  color: #eef6fa;
+  font-weight: 600;
+}
+.bloom-anatomy i {
+  font-style: italic;
+  color: rgba(191, 233, 255, 0.6);
+}
+.bloom-outofframe {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(191, 233, 255, 0.12);
+  font-size: 11px;
+  line-height: 1.5;
+  color: rgba(191, 233, 255, 0.5);
+}
+
+.bloom-caption {
+  margin-top: 22px;
+  padding-top: 20px;
+  border-top: 1px solid rgba(191, 233, 255, 0.12);
+}
+.bloom-caption-id {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(191, 233, 255, 0.6);
+}
+.bloom-caption-title {
+  font-size: 18px;
+  line-height: 1.3;
+  margin: 8px 0 14px;
+  color: #eef6fa;
+}
+.bloom-caption-status {
+  font-size: 14px;
+  line-height: 1.55;
+  color: #c4dae4;
+}
+.bloom-violations {
+  margin: 14px 0 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.bloom-violations li {
+  font-size: 12px;
+  line-height: 1.4;
+  color: #ff8a6a;
+}

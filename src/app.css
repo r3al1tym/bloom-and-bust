@@ -1,0 +1,31 @@
+:root {
+  --mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+  --sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+* {
+  box-sizing: border-box;
+}
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  background: #02080e;
+  color: #e8eef1;
+  font-family: var(--sans);
+}
+.mono {
+  font-family: var(--mono);
+}
+.loading,
+.fatal {
+  display: grid;
+  place-items: center;
+  height: 100dvh;
+  color: #9fb1bb;
+}
+.fatal {
+  color: #ff7a52;
+  padding: 2rem;
+  text-align: center;
+}
