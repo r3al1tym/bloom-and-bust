@@ -13,7 +13,8 @@ import { useFrame } from '@react-three/fiber'
 import { MeshTransmissionMaterial } from '@react-three/drei'
 import * as THREE from 'three'
 import type { BloomSpec } from './bloomModel'
-import { driftSeed, STAGE_COUNT } from './bloomModel'
+import { driftSeed, STAGE_COUNT, visualsAsOf } from './bloomModel'
+import type { Stock } from '@/data/bloom'
 import {
   bellVertex,
   bellFragment,
@@ -47,17 +48,27 @@ const PULSE: Record<BloomSpec['vitality'], { rate: number; depth: number; neural
 
 interface Props {
   spec: BloomSpec
+  /** The raw stock — Jellyfish interpolates its CONTINUOUS visual state (glow/alive/mass/sink/colour)
+   *  from the store's live decadeF each frame via visualsAsOf(), so time flows like water with zero
+   *  per-frame React re-render. `spec` still carries the discrete/structural fields (severance, arms). */
+  stock: Stock
   position: [number, number, number]
   selected: boolean
   dimmed: boolean
+  /** The ONE focal creature (the composed hero the crane lands on) — only it renders the expensive
+   *  full-scene refraction shell. Distinct from `hero` (the vitality-sealed look), which at the 1950s
+   *  opening is true for ALL 28 stocks (each at 100% of its own then-peak) — gating the transmission
+   *  on `hero` fired 28 FBO refraction passes/frame at load. */
+  focal: boolean
   onSelect: () => void
 }
 
-export function Jellyfish({ spec, position, selected, dimmed, onSelect }: Props) {
+export function Jellyfish({ spec, stock, position, selected, dimmed, focal, onSelect }: Props) {
   const group = useRef<THREE.Group>(null)
   const bellMat = useRef<THREE.ShaderMaterial>(null)
   const neuralMat = useRef<THREE.ShaderMaterial>(null)
   const haloMat = useRef<THREE.SpriteMaterial>(null)
+  const haloSprite = useRef<THREE.Sprite>(null)
   const glassRef = useRef<THREE.Mesh>(null) // hero-only refraction shell — pulsed to match the bell
   const swayMats = useRef<THREE.ShaderMaterial[]>([])
   const seed = useMemo(() => driftSeed(spec.id), [spec.id])
@@ -127,42 +138,66 @@ export function Jellyfish({ spec, position, selected, dimmed, onSelect }: Props)
     [spec.id], // eslint-disable-line react-hooks/exhaustive-deps
   )
 
-  // Fate-driven targets recomputed each render from the stock's CURRENT decade (the scrubber changes
-  // spec.tankColor / alive / pulse / glow). The uniform objects are memoized on [spec.id], so — as in
-  // the origin project — they'd freeze at first render; the origin never re-colored a creature after
-  // mount, but here dragging the years must recolor and re-dim it. Lerp the uniforms toward these
-  // targets in useFrame so the whole bloom ages smoothly as you scrub.
+  // reusable scratch colours so the per-frame lerp allocates nothing (targets are recomputed live from
+  // the continuous decade, not memoized on a discrete spec value).
   const targetColor = useMemo(() => new THREE.Color(spec.tankColor), [spec.tankColor])
   const targetColorB = useMemo(() => new THREE.Color(spec.tankColor).multiplyScalar(1.5), [spec.tankColor])
 
+  // per-creature orientation character — a deterministic resting tilt (pitch/roll) + a slow wander so
+  // the bloom drifts at varied angles like real medusae, not a field of upright umbrellas. Bounded
+  // small so the bell/anatomy still reads. Phases derived from the seed so every creature differs.
+  const tilt = useMemo(() => ({
+    pitch: (seed - 0.5) * 0.7, // resting fore/aft lean, ±0.35 rad (~20°)
+    roll: (driftSeed(spec.id + 'r') - 0.5) * 0.7, // resting side lean
+    wSpeed: 0.05 + seed * 0.05, // slow wander frequency
+  }), [seed, spec.id])
+
   useFrame((state, dt) => {
     const t = state.clock.elapsedTime
-    const ctl = useBloomControls.getState() // live-tuning knobs (glow/halo boosts, fog depth)
+    const ctl = useBloomControls.getState() // live-tuning knobs (glow/halo boosts, fog depth) + clock
     const k = Math.min(1, dt * 3) // fate-transition easing rate
+
+    // CONTINUOUS state — interpolate this stock's visual targets from the live decade float, so colour,
+    // glow, mass and sink all flow like water as the year sweeps (no discrete decade jumps). Pure, and
+    // the only per-frame cost is a little arithmetic; the eased uniforms below smooth it to 60fps.
+    const v = visualsAsOf(stock, ctl.decadeF)
+    targetColor.set(v.tankColor)
+    targetColorB.copy(targetColor).multiplyScalar(1.5)
+    // pulse rate/depth/neural interpolated CONTINUOUSLY from survival (glow) — a stock's breath slows
+    // smoothly as it dies rather than snapping at fate thresholds. Healthy ≈ slow-deep hero breath;
+    // husk ≈ near-still. (Replaces the discrete PULSE[vitality] lookup for the animated targets.)
+    const pRate = 0.4 + 1.9 * v.glow // ~0.4 (still) → ~2.3 (lively)
+    const pDepth = 0.02 + 0.2 * v.glow // shallow held breath → deep muscular jet
+    const pNeural = 0.1 + 1.0 * v.glow
+
+    // camera distance for this creature, computed ONCE per frame and reused by the halo-fog and the
+    // draw-order rank (was two independent subtract+sqrt for the same value).
+    const camDist = group.current ? group.current.position.distanceTo(state.camera.position) : 0
     if (bellMat.current) {
       const u = bellMat.current.uniforms
       u.uTime.value = t
       u.uGlowBoost.value = ctl.glowBoost
       u.uFogDensity.value = ctl.fogDensity
-      const target = dimmed ? 0.55 : 1 // dim by depth/emissive, NOT an opacity crush (v1 bug)
+      // dying stocks also dim their bell (sink darkens): a husk sinking into the deep loses its light.
+      const target = (dimmed ? 0.55 : 1) * (1 - 0.35 * v.sink)
       u.uOpacity.value += (target - u.uOpacity.value) * Math.min(1, dt * 4)
       // ease fate-driven uniforms toward the current decade's state (color / glow / pulse / aliveness)
       ;(u.uColor.value as THREE.Color).lerp(targetColor, k)
       ;(u.uColorB.value as THREE.Color).lerp(targetColorB, k)
-      u.uGlow.value += (spec.glow - u.uGlow.value) * k
-      u.uAlive.value += (spec.alive - u.uAlive.value) * k
+      u.uGlow.value += (v.glow - u.uGlow.value) * k
+      u.uAlive.value += (v.alive - u.uAlive.value) * k
       u.uSplit.value += (spec.engWeight - u.uSplit.value) * k
-      u.uPulseRate.value += (pulse.rate - u.uPulseRate.value) * k
-      u.uPulseDepth.value += (pulse.depth - u.uPulseDepth.value) * k
+      u.uPulseRate.value += (pRate - u.uPulseRate.value) * k
+      u.uPulseDepth.value += (pDepth - u.uPulseDepth.value) * k
     }
     if (neuralMat.current) {
       const u = neuralMat.current.uniforms
       u.uTime.value = t
       u.uFogDensity.value = ctl.fogDensity
-      u.uSpeed.value += (pulse.neural - u.uSpeed.value) * k
+      u.uSpeed.value += (pNeural - u.uSpeed.value) * k
       ;(u.uColor.value as THREE.Color).lerp(targetColor, k)
-      // dimmed creatures fire fainter so only the focus/hero blooms hard
-      u.uIntensity.value = spec.alive * (dimmed ? 0.4 : 1)
+      // dimmed creatures fire fainter; a sinking husk's mind nearly goes out
+      u.uIntensity.value = v.alive * (dimmed ? 0.4 : 1) * (1 - 0.5 * v.sink)
     }
     if (glassRef.current) {
       // HERO GLASS SHELL — MeshTransmissionMaterial runs its own vertex shader, so it CAN'T carry the
@@ -170,24 +205,30 @@ export function Jellyfish({ spec, position, selected, dimmed, onSelect }: Props)
       // exactly why the focused hero read as static/glassy. Reproduce the bell's dominant pulse
       // envelope (bloomShaders.bellVertex, sampled at the apex h≈1) as a non-uniform scale so the
       // refraction core squashes/bulges in lockstep with the gel around it. Base 0.94 = shell inset.
-      const phase = t * pulse.rate + seed * 6.2831853
+      const phase = t * pRate + seed * 6.2831853
       const s = Math.sin(phase)
-      const p = (s > 0 ? Math.pow(s, 0.6) : -Math.pow(-s, 1.4)) * pulse.depth
+      const p = (s > 0 ? Math.pow(s, 0.6) : -Math.pow(-s, 1.4)) * pDepth
       glassRef.current.scale.set(0.94 * (1 - p * 0.55), 0.94 * (1 + p), 0.94 * (1 - p * 0.55))
     }
     if (haloMat.current && group.current) {
       // the aura breathes in time with the bell's own pulse, and dims (doesn't vanish) when another
       // medusa is selected so the whole tank keeps a soft ambient glow
-      const breath = 0.85 + 0.15 * Math.sin(t * pulse.rate + seed * 6.28)
+      const breath = 0.85 + 0.15 * Math.sin(t * pRate + seed * 6.28)
       // atmospheric fog: the halo also attenuates into the haze with distance (same fogExp2 as the
       // scene + shaders) so far medusae don't glow sharp over the backdrop
-      const depth = group.current.position.distanceTo(state.camera.position)
-      const fd = ctl.fogDensity * depth
+      const fd = ctl.fogDensity * camDist
       const fog = 1 - Math.exp(-fd * fd)
-      const target = haloBase * ctl.haloBoost * breath * (dimmed ? 0.4 : 1) * (1 - 0.7 * fog)
+      // live halo strength from CONTINUOUS aliveness/glow (was memoized haloBase); a sinking husk's
+      // aura fades out with it.
+      const liveHaloBase = 0.22 + 0.5 * v.alive + 0.35 * v.glow
+      const target = liveHaloBase * ctl.haloBoost * breath * (dimmed ? 0.4 : 1) * (1 - 0.7 * fog) * (1 - 0.5 * v.sink)
       const cur = haloMat.current.opacity
       haloMat.current.opacity = cur + (target - cur) * Math.min(1, dt * 4)
       haloMat.current.color.lerp(targetColor, k) // aura follows the current fate hue
+      // P8: a fully-faded halo (fogged/dimmed husk) still rasterizes its giant additive quad — skip
+      // the draw entirely below an epsilon (toggle the SPRITE object, not the material), restore above
+      // it. Lossless (it contributes ~nothing there).
+      if (haloSprite.current) haloSprite.current.visible = haloMat.current.opacity >= 0.012
     }
     // tentacles/arms recolor with the fate too (their uColor is memoized per-appendage otherwise)
     for (const m of swayMats.current)
@@ -203,33 +244,37 @@ export function Jellyfish({ spec, position, selected, dimmed, onSelect }: Props)
       const curX = Math.sin(t * 0.18 + position[0] * 0.25) * 0.18 + Math.sin(t * 0.11 + position[2] * 0.3) * 0.1
       const curY = Math.cos(t * 0.15 + position[0] * 0.2) * 0.12
 
-      // ── VERTICAL PULSE-GLIDE — real medusa locomotion, WITHOUT scattering the legible layout. A
-      // jellyfish jets UP on the contraction and settles on the relaxation, so its motion is a
-      // rhythmic ratchet synced to the bell pulse (same phase as bloomShaders.bellVertex), not a
-      // lava-lamp float. It stays anchored near its data position (so each stock stays identifiable);
-      // the kick amplitude + a slow bounded ascent-and-return read as VITALITY: a thriving stock
-      // (fast, deep pulse) climbs eagerly, a husk barely twitches. The whole-drift "rising through the
-      // shafts" documentary read comes from the camera crane + falling marine snow, not from creatures
-      // migrating across the frame.
-      const pulsePhase = t * pulse.rate + seed * 6.2831853
-      const ps = Math.sin(pulsePhase)
-      // asymmetric thrust: fast up-kick on contraction (ps>0), slower settle on relaxation — matches
-      // the bell's own skewed jet so body and motion agree.
-      const thrust = ps > 0 ? Math.pow(ps, 0.6) : -Math.pow(-ps, 1.6) * 0.5
-      const vigor = 0.35 + 1.4 * spec.alive // husk ~0.4, hero ~1.6 — vitality = how hard it climbs
-      const kick = thrust * pulse.depth * vigor * 2.2 // per-pulse vertical excursion (stays local)
-      // a slow, BOUNDED ascent-and-return (±~0.6·vigor world units) so a lively creature visibly works
-      // its way up and drifts back down — migration, but tethered to its home so the arrangement holds.
-      const glide = Math.sin(t * (0.12 + 0.06 * spec.alive) + seed * 6.28) * 0.6 * vigor
+      // ── ORGANIC VERTICAL DRIFT — a real medusa breathes with a gentle vertical lilt, it does not
+      // pogo. The earlier fast pulse-kick fought the slow tentacle sway and read as jittery; this is a
+      // small, slow bob synced to the (now gentle) pulse plus a very slow long-period rise-and-fall, so
+      // the creature just hangs and breathes in the current. The tentacle sway + shared water current
+      // are the dominant motion. Amplitudes are small (world units) and tethered to the data slot.
+      const pulsePhase = t * pRate + seed * 6.2831853
+      const bob = Math.sin(pulsePhase) * pDepth * 0.6 // a soft breath-bob, ~1/4 of the old kick
+      const lilt = Math.sin(t * (0.09 + 0.04 * v.glow) + seed * 6.28) * 0.28 // slow long lift/settle
+
+      // ── DEATH SINK — a collapsing stock loses buoyancy and slowly settles DOWN into the dark deep,
+      // visibly losing life (bell/halo/mind dimming handled above). Healthy = 0; a husk sinks ~3.4
+      // units below its slot into the fog. Eased implicitly by the smooth glow interpolation, so as the
+      // year sweeps the graveyard drifts downward rather than snapping small.
+      const SINK_DEPTH = 3.4
+      const sinkY = -v.sink * SINK_DEPTH
 
       group.current.position.x = position[0] + curX
-      group.current.position.y = position[1] + curY + glide + kick
+      group.current.position.y = position[1] + curY + bob + lilt + sinkY
       group.current.position.z = position[2] + Math.sin(t * 0.13 + position[0] * 0.35) * 0.12
-      group.current.rotation.z = curX * 0.15 // lean into the current
+
+      // ── ORIENTATION — vary the bell's tilt like a real drifting bloom instead of a field of upright
+      // umbrellas: a deterministic resting pitch/roll per creature + a slow wander, and a lean into the
+      // current. A dying stock also tips further over as it sinks (loses its righting control). Kept
+      // gentle so the anatomy still reads. rotation.y keeps a slow turn so tentacles trail.
+      const sag = v.sink * 0.5 // sinking stocks list further as they die
+      group.current.rotation.x = tilt.pitch + Math.sin(t * tilt.wSpeed + seed * 6.28) * 0.12 + sag
+      group.current.rotation.z = tilt.roll + curX * 0.15 + Math.cos(t * tilt.wSpeed * 0.8 + seed * 3.1) * 0.1
       group.current.rotation.y = Math.sin(t * 0.15 + seed * 6.28) * 0.22
       // whole-creature scale = this-decade survival (the tank thins as stocks collapse) × a small
       // selection pop. Eased smoothly so scrubbing a stock into collapse SHRINKS it before your eyes.
-      const s = spec.decadeScale * (selected ? 1.12 : 1)
+      const s = v.decadeScale * (selected ? 1.12 : 1)
       const cs = group.current.scale.x
       group.current.scale.setScalar(cs + (s - cs) * Math.min(1, dt * 3))
 
@@ -240,8 +285,7 @@ export function Jellyfish({ spec, position, selected, dimmed, onSelect }: Props)
       // of distance — a back creature's tentacles painted on top of a front creature's body. Fix:
       // rank each creature by camera distance and offset its whole stack, so a nearer medusa draws
       // entirely after a farther one (painter's algorithm) while the intra-creature layering holds.
-      const dist = group.current.position.distanceTo(state.camera.position)
-      const base = -dist * 100 // farther → more negative → drawn first (behind)
+      const base = -camDist * 100 // farther → more negative → drawn first (behind)
       group.current.traverse((o) => {
         if (o.userData.layer === undefined) o.userData.layer = o.renderOrder // capture the local layer once
         o.renderOrder = base + o.userData.layer
@@ -270,8 +314,11 @@ export function Jellyfish({ spec, position, selected, dimmed, onSelect }: Props)
           document.body.style.cursor = 'auto'
         }}
       >
-        <sphereGeometry args={[r * 1.7, 12, 12]} />
-        <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+        <sphereGeometry args={[r * 1.7, 10, 10]} />
+        {/* invisible raycast target: colorWrite:false skips the framebuffer color write + alpha blend
+            entirely (transparent+opacity:0 still rasterizes and blends every frame otherwise). The
+            mesh stays in the scene so the r3f raycaster still hits it. */}
+        <meshBasicMaterial transparent opacity={0} depthWrite={false} colorWrite={false} />
       </mesh>
 
       {/* VOLUMETRIC HALO — a soft camera-facing aura behind every medusa (not just the hero), tinted
@@ -279,7 +326,7 @@ export function Jellyfish({ spec, position, selected, dimmed, onSelect }: Props)
           glowing light in the water; Bloom feathers it into a true halo. depthTest stays ON so a far
           medusa's halo is correctly occluded by nearer creatures — with it OFF, back halos popped on
           top of front bells as the camera orbited (a flicker source). */}
-      <sprite ref={(s) => { if (s) s.scale.setScalar(haloScale) }} position={[0, r * 0.15, -r * 0.2]} renderOrder={0}>
+      <sprite ref={(s) => { haloSprite.current = s; if (s) s.scale.setScalar(haloScale) }} position={[0, r * 0.15, -r * 0.2]} renderOrder={0}>
         <spriteMaterial
           ref={haloMat}
           map={haloTexture()}
@@ -326,12 +373,12 @@ export function Jellyfish({ spec, position, selected, dimmed, onSelect }: Props)
         />
       </points>
 
-      {/* REFRACTION — a real glass shell just inside the hero's bell that BENDS the god-light, the
-          other medusae, and the tentacles behind it (drei transmission). Hero-only + low-res sampler
-          so 10 full-scene transmission renders don't tank the frame; the biggest "this is real, not
-          CG" cue where the eye is already looking. Renders under the tinted shell so the semantic hue
-          still reads on top. */}
-      {hero && (
+      {/* REFRACTION — a real glass shell just inside the FOCAL creature's bell that BENDS the
+          god-light, the other medusae, and the tentacles behind it (drei transmission). Each
+          MeshTransmissionMaterial does a full-scene FBO render, so this MUST be the single focal hero
+          only — gating on `hero` (vitality-sealed) fired one per creature (all 28 at the 1950s peak),
+          the scene's dominant cost. The biggest "this is real, not CG" cue, kept where the eye is. */}
+      {focal && (
         <mesh ref={glassRef} geometry={bellGeo} scale={0.94} renderOrder={1}>
           <MeshTransmissionMaterial
             transmission={1}
@@ -413,20 +460,12 @@ export function Jellyfish({ spec, position, selected, dimmed, onSelect }: Props)
         )
       })}
 
-      {/* FLOOR STINGS — terracotta sparks, one per violation, ringing the bell rim */}
-      {Array.from({ length: spec.stings }).map((_, i) => {
-        const ang = (i / Math.max(spec.stings, 1)) * Math.PI * 2
-        return (
-          <mesh
-            key={`sting-${i}`}
-            position={[Math.cos(ang) * r * 1.0, -r * 0.05, Math.sin(ang) * r * 1.0]}
-            renderOrder={3}
-          >
-            <sphereGeometry args={[r * 0.06, 8, 8]} />
-            <meshBasicMaterial color="#ff6a3c" transparent opacity={0.95 * (dimmed ? 0.5 : 1)} blending={THREE.AdditiveBlending} depthWrite={false} />
-          </mesh>
-        )
-      })}
+      {/* FLOOR STINGS — terracotta sparks, one per discard unit, ringing the bell rim. One
+          InstancedMesh instead of up to ~10 separate sphere meshes (was up to ~280 draws across the
+          tank); identical additive coral dots. */}
+      {spec.stings > 0 && (
+        <StingSparks count={spec.stings} r={r} dimmed={dimmed} />
+      )}
 
       {/* ARTIFACT MOTES — warm, clustered, countable; distinct from the cool ambient snow */}
       {spec.motes.map((m, mi) =>
@@ -446,6 +485,38 @@ export function Jellyfish({ spec, position, selected, dimmed, onSelect }: Props)
         }),
       )}
     </group>
+  )
+}
+
+// Floor stings as ONE InstancedMesh — a shared unit sphere, one instance per discard unit placed
+// around the bell rim. Collapses up to ~10 sphere draws (+ 10 geometry allocations) per creature to a
+// single instanced draw; the additive coral look is byte-identical to the old per-mesh spheres.
+const STING_GEO = new THREE.SphereGeometry(1, 8, 8) // unit sphere, scaled per-instance via the matrix
+function StingSparks({ count, r, dimmed }: { count: number; r: number; dimmed: boolean }) {
+  const ref = useRef<THREE.InstancedMesh>(null)
+  const setMatrices = (m: THREE.InstancedMesh | null) => {
+    ref.current = m
+    if (!m) return
+    const dummy = new THREE.Object3D()
+    for (let i = 0; i < count; i++) {
+      const ang = (i / Math.max(count, 1)) * Math.PI * 2
+      dummy.position.set(Math.cos(ang) * r, -r * 0.05, Math.sin(ang) * r)
+      dummy.scale.setScalar(r * 0.06)
+      dummy.updateMatrix()
+      m.setMatrixAt(i, dummy.matrix)
+    }
+    m.instanceMatrix.needsUpdate = true
+  }
+  return (
+    <instancedMesh ref={setMatrices} args={[STING_GEO, undefined, count]} renderOrder={3}>
+      <meshBasicMaterial
+        color="#ff6a3c"
+        transparent
+        opacity={0.95 * (dimmed ? 0.5 : 1)}
+        blending={THREE.AdditiveBlending}
+        depthWrite={false}
+      />
+    </instancedMesh>
   )
 }
 

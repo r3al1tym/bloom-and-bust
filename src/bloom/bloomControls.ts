@@ -31,6 +31,15 @@ export interface BloomControlsState {
   // camera
   driftSpeed: number // multiplier on the orbit frequencies
   driftAmount: number // multiplier on the orbit amplitudes
+  // THE STORY CLOCK (NOT a visual default / reset target). Time is driven through the store so it can
+  // flow CONTINUOUSLY at 60fps without re-rendering React every frame: App's rAF sweep (or the scrubber
+  // drag) writes it, and the per-frame useFrame loops in Jellyfish/Atmosphere read it via getState().
+  //   decadeF       — continuous decade position 0..6 (0 = 1950, 6 = 2018); Jellyfish interpolates each
+  //                   stock's glow/mass/sink/colour along it, so the bloom ages like water, not in jumps.
+  //   decadeProgress — decadeF/6 (0..1); god-rays, fog, and the warm plankton layer read it so the
+  //                   LIGHT itself goes out as the fishery dies — "light as a clock".
+  decadeF: number
+  decadeProgress: number
   // camera framing (NOT part of the visual defaults / reset — set live via the Framing panel):
   freeze: boolean // pause the auto-orbit so you can hand-compose a shot to capture
   camStart: CamPose | null // authored opening pose; null = derived arc-in default
@@ -69,6 +78,8 @@ export const liveCamPose: CamPose = { az: 0, pol: 0, rad: 11 }
 // slices they need, and per-frame loops use getState() to avoid re-rendering React on every tick.
 export const useBloomControls = create<BloomControlsState>(() => ({
   ...BLOOM_DEFAULTS,
+  decadeF: 0,
+  decadeProgress: 0,
   freeze: false,
   camStart: null,
   camEnd: null,

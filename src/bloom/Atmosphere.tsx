@@ -7,6 +7,7 @@ import * as THREE from 'three'
 import { rayVertex, rayFragment } from './bloomShaders'
 import { makeMarineSnow } from './bloomGeometry'
 import { dotTexture } from './dotTexture'
+import { useBloomControls } from './bloomControls'
 
 function GodRay({
   x,
@@ -32,13 +33,21 @@ function GodRay({
       uTime: { value: 0 },
       uSeed: { value: seed },
       uColor: { value: new THREE.Color(color) },
+      uLight: { value: 1 },
     }),
     [seed, color],
   )
   const mat = useRef<THREE.ShaderMaterial>(null)
   const mesh = useRef<THREE.Mesh>(null)
   useFrame((s) => {
-    if (mat.current) mat.current.uniforms.uTime.value = s.clock.elapsedTime
+    if (mat.current) {
+      mat.current.uniforms.uTime.value = s.clock.elapsedTime
+      // the surface light fails as the fishery dies: full at the 1950s peak, ~45% by 2018.
+      const p = useBloomControls.getState().decadeProgress
+      const target = 1 - 0.55 * p
+      const cur = mat.current.uniforms.uLight.value
+      mat.current.uniforms.uLight.value = cur + (target - cur) * 0.05 // ease so a scrub isn't a snap
+    }
     // Y-axis billboard: yaw the shaft to face the camera horizontally while staying vertical, so it
     // always presents its broad face (never seen edge-on as a flat card) — reads as a volumetric
     // column from any orbit angle. A slight art-directed lean (rot) is preserved on Z.
@@ -80,6 +89,9 @@ function MarineSnow({
   driftY,
   spin,
   span,
+  seed = 7,
+  lowBias = false,
+  fadeWithDecade = false,
 }: {
   count: number
   size: number
@@ -88,12 +100,21 @@ function MarineSnow({
   driftY: number
   spin: number
   span: number
+  seed?: number
+  lowBias?: boolean
+  /** the warm living-water layer thins as the fishery dies (opacity × (1 − 0.5·decadeProgress)). */
+  fadeWithDecade?: boolean
 }) {
-  const { positions, sizes } = useMemo(() => makeMarineSnow(count), [count])
+  const { positions, sizes } = useMemo(() => makeMarineSnow(count, seed, lowBias), [count, seed, lowBias])
   const ref = useRef<THREE.Points>(null)
+  const mat = useRef<THREE.PointsMaterial>(null)
   useFrame((s) => {
     if (!ref.current) return
     const t = s.clock.elapsedTime
+    if (fadeWithDecade && mat.current) {
+      const p = useBloomControls.getState().decadeProgress
+      mat.current.opacity = opacity * (1 - 0.5 * p)
+    }
     // gentle TRANSLATION only — a slow settling drift + a faint lateral sway. The old code ROTATED
     // the whole cloud on Y every frame (rotation.y = t*spin), which swept every point through a
     // circle: near points crossed pixels fast and, being sub-pixel additive with no MSAA, twinkled
@@ -113,6 +134,7 @@ function MarineSnow({
         <bufferAttribute attach="attributes-size" args={[sizes, 1]} />
       </bufferGeometry>
       <pointsMaterial
+        ref={mat}
         color={color}
         size={size}
         sizeAttenuation
@@ -148,9 +170,15 @@ export function Atmosphere() {
           and a slow RISING plankton layer (negative driftY → drifts UP) so the water reads as a moving
           column the creatures climb through — reinforcing the vertical pulse-glide. Densities/opacity
           restored toward the lived-in look; still additive-low so they never sum to a white veil. */}
-      <MarineSnow count={1300} size={0.075} color="#9fc7d6" opacity={0.34} driftY={0.16} spin={0.05} span={22} />
-      <MarineSnow count={220} size={0.16} color="#c6ecff" opacity={0.55} driftY={0.06} spin={-0.04} span={28} />
-      <MarineSnow count={340} size={0.055} color="#bfe4d8" opacity={0.28} driftY={-0.11} spin={0.03} span={24} />
+      <MarineSnow count={1300} size={0.075} color="#9fc7d6" opacity={0.34} driftY={0.16} spin={0.05} span={22} seed={7} />
+      <MarineSnow count={220} size={0.16} color="#c6ecff" opacity={0.55} driftY={0.06} spin={-0.04} span={28} seed={19} />
+      <MarineSnow count={340} size={0.055} color="#bfe4d8" opacity={0.28} driftY={-0.11} spin={0.03} span={24} seed={31} />
+      {/* WARM LIVING-WATER layer — amber plankton/eggs/larvae rising from the deep. Confined to the
+          dark lower third (lowBias) so it can't stack into the bright god-ray zone, and it THINS as
+          the fishery dies (fadeWithDecade) — the water's own life fading, tied only to aggregate
+          decade progress, never faking a per-stock channel. This replaces the retired per-creature
+          motes as the lived-in cue. */}
+      <MarineSnow count={170} size={0.05} color="#d9b48a" opacity={0.12} driftY={-0.09} spin={0.02} span={24} seed={53} lowBias fadeWithDecade />
     </>
   )
 }

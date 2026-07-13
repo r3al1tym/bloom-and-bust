@@ -73,12 +73,26 @@ export const bellVertex = /* glsl */ `
   varying float vFrill;        // brightens the lace edges a touch
   varying vec3 vLocal;         // local position (for stable interior caustics in the fragment)
   varying float vFogDepth;     // view-space distance for atmospheric fog
+  varying float vCaustic;      // subsurface-caustic value, computed PER-VERTEX (2 octaves) and
+                               // interpolated — moved off the per-fragment path (was 72 sins/frag on
+                               // 28 overdrawn DoubleSide bells). The bell is finely tessellated, so
+                               // vertex-rate 2-octave noise is visually indistinguishable from the old
+                               // 3-octave per-fragment sample but a large fill-rate saving.
 
   ${NOISE}
 
   void main() {
     vec3 p = position;
     vLocal = position / uRadius;                     // normalized, pulse-independent
+
+    // drifting subsurface caustic, sampled here (vertex) instead of per-fragment. Two octaves at
+    // vertex density read the same as three at fragment density for this smooth, low-freq term.
+    {
+      vec3 cp = vLocal * 3.2 + vec3(uTime * 0.28, uTime * 0.16, uSeed * 12.0);
+      float a = 0.5, v = 0.0;
+      for (int i = 0; i < 2; i++) { v += a * vnoise(cp); cp *= 2.02; a *= 0.5; }
+      vCaustic = 0.5 + 0.5 * v;                       // 0..1, matches the old fragment mapping
+    }
     float apexY = uRadius * 0.6;
     // normalized height: 1 at the apex knob, 0 at the margin
     float h = clamp(p.y / apexY, 0.0, 1.0);
@@ -146,8 +160,8 @@ export const bellFragment = /* glsl */ `
   varying float vFrill;
   varying vec3 vLocal;
   varying float vFogDepth;
+  varying float vCaustic;      // subsurface caustic, computed per-vertex (see bellVertex)
 
-  ${NOISE}
   ${FOG}
 
   void main() {
@@ -186,9 +200,9 @@ export const bellFragment = /* glsl */ `
 
     // ── drifting subsurface caustics — the single biggest "living gel" cue. Mottled brighter/darker
     // veins move slowly THROUGH the flesh (sampled on stable local pos so they ride the body, not the
-    // screen), richer where the flesh is thick. This is what a smooth glass dome lacks.
-    float caustic = fbm(vLocal * 3.2 + vec3(uTime * 0.28, uTime * 0.16, uSeed * 12.0));
-    caustic = 0.5 + 0.5 * caustic;               // 0..1
+    // screen), richer where the flesh is thick. Now computed per-VERTEX (vCaustic) and interpolated —
+    // this is what a smooth glass dome lacks, at a fraction of the per-fragment cost.
+    float caustic = vCaustic;                    // 0..1, from bellVertex (2-octave)
     float mottle = mix(0.62, 1.35, caustic) * (0.55 + 0.45 * thickness / 0.16);
 
     vec3 interior = body * (0.58 + 1.35 * uAlive) * core * mottle * uGlowBoost;
@@ -363,6 +377,8 @@ export const rayFragment = /* glsl */ `
   uniform float uTime;
   uniform float uSeed;
   uniform vec3 uColor;
+  uniform float uLight;   // 1 at the 1950s peak → ~0.45 by 2018: the surface light fails as the
+                          // fishery dies. Scales the shaft brightness AND alpha (dims + thins the beam).
   varying vec2 vUv;
   varying vec3 vNormal;
   varying vec3 vView;
@@ -400,7 +416,8 @@ export const rayFragment = /* glsl */ `
     caustic = mix(0.7, 1.2, caustic);
     float striate = 0.85 + 0.15 * sin(vUv.y * 9.0 - uTime * 0.5 + uSeed * 6.28); // gentle vertical flow
     float breathe = 0.8 + 0.2 * sin(uTime * 0.25 + uSeed * 6.28);
-    float a = topDown * edge * breathe * caustic * striate * 0.26;
+    float a = topDown * edge * breathe * caustic * striate * 0.26 * uLight;
+    // keep the *3.4 HDR term unchanged (white-clip guard); uLight rides on top to fade the shaft.
     gl_FragColor = vec4(uColor * a * 3.4, a);
   }
 `

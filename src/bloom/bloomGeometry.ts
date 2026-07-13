@@ -112,7 +112,9 @@ export function makeTentacleGeometry(length: number, thick: boolean): THREE.Tube
     pts.push(new THREE.Vector3(lean, -t * length, 0))
   }
   const curve = new THREE.CatmullRomCurve3(pts)
-  const g = new THREE.TubeGeometry(curve, segs, thick ? 0.035 : 0.014, 8, false)
+  // 5 radial segments: at tube radius 0.014–0.035 the cross-section is sub-pixel, so 5 vs 8 rings is
+  // imperceptible; keep tubularSegments=36 (the sway wave needs the length resolution).
+  const g = new THREE.TubeGeometry(curve, segs, thick ? 0.035 : 0.014, 5, false)
   // taper the final 20% by scaling the tube's radial ring toward the tip
   const posAttr = g.attributes.position as THREE.BufferAttribute
   const uvAttr = g.attributes.uv as THREE.BufferAttribute
@@ -140,7 +142,7 @@ export function makeStubGeometry(R: number, thick: boolean): THREE.TubeGeometry 
   const pts: THREE.Vector3[] = []
   for (let i = 0; i <= segs; i++) pts.push(new THREE.Vector3(0, -(i / segs) * len, 0))
   const curve = new THREE.CatmullRomCurve3(pts)
-  return new THREE.TubeGeometry(curve, segs, thick ? 0.06 : 0.03, 8, false)
+  return new THREE.TubeGeometry(curve, segs, thick ? 0.06 : 0.03, 5, false)
 }
 
 /** A twisted, frilly oral-arm ribbon (PlaneGeometry strip). uv.x = arc 0→1 for the sway shader. */
@@ -161,7 +163,7 @@ export function makeRibbonGeometry(length: number): THREE.PlaneGeometry {
 
 /** ~1200 ambient marine-snow points: cool, uncountable, drifting PAST — deliberately distinct from
  *  the warm, clustered, countable artifact-motes. Deterministic layout. */
-export function makeMarineSnow(count: number, seed = 7): {
+export function makeMarineSnow(count: number, seed = 7, lowBias = false): {
   positions: Float32Array
   sizes: Float32Array
 } {
@@ -174,7 +176,9 @@ export function makeMarineSnow(count: number, seed = 7): {
   }
   for (let i = 0; i < count; i++) {
     pos[i * 3] = (rnd() - 0.5) * 38     // widened to blanket the wide drift field (layout RX≈13.5)
-    pos[i * 3 + 1] = (rnd() - 0.5) * 24
+    // lowBias: confine the warm plankton to the DEEP third so it lives in the dark below the bright
+    // upper god-ray zone and physically cannot stack into it → cannot sum to a white veil.
+    pos[i * 3 + 1] = lowBias ? -12 + rnd() * 10 : (rnd() - 0.5) * 24
     pos[i * 3 + 2] = (rnd() - 0.5) * 20
     sizes[i] = 0.02 + rnd() * 0.06
   }

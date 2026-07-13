@@ -81,6 +81,7 @@ interface Props {
   source: string
   sourceUrl: string
   decades: string[]
+  spanYears: number
   decade: number
   onDecade: (d: number) => void
   autoplaying?: boolean
@@ -95,25 +96,54 @@ export function BloomRenderer({
   source,
   sourceUrl,
   decades,
+  spanYears,
   decade,
   onDecade,
   autoplaying = false,
   selectedId,
   onSelect,
 }: Props) {
-  const specs = useMemo(() => buildBloom(stocks, decade), [stocks, decade])
+  // Time flows continuously; React only rebuilds the specs at INTEGER decade boundaries (the only
+  // structural change is tentacle severance, a discrete decade event). Everything visual — colour,
+  // glow, mass, sink — is interpolated per-frame inside Jellyfish from the store's live decadeF, so a
+  // smooth sweep costs zero per-frame React re-renders. Round to the nearest decade for the spec so a
+  // severance appears at the decade it happens.
+  const decadeInt = Math.round(decade)
+  const specs = useMemo(() => buildBloom(stocks, decadeInt), [stocks, decadeInt])
   // layout is anchored to the stock set (not the decade) so creatures hold position as you scrub
-  const positions = useMemo(() => layout(buildBloom(stocks, 2)), [stocks])
+  const baseSpecs = useMemo(() => buildBloom(stocks, 2), [stocks])
+  const positions = useMemo(() => layout(baseSpecs), [baseSpecs])
+  // the SINGLE focal creature the crane lands on — only it renders the costly refraction shell.
+  // Same choice as layout()'s hero (a thriving survivor, else the biggest bell), resolved to an id so
+  // it's stable across the decade scrub even as vitality flips.
+  const focalId = useMemo(() => {
+    let i = baseSpecs.findIndex((s) => s.vitality === 'sealed')
+    if (i < 0) i = baseSpecs.reduce((best, s, k) => (s.bellRadius > baseSpecs[best].bellRadius ? k : best), 0)
+    return baseSpecs[i]?.id ?? null
+  }, [baseSpecs])
   const hasSelection = selectedId != null
   const controls = useRef<ComponentRef<typeof OrbitControls>>(null)
   const detail = stocks.find((s) => s.id === selectedId) ?? null
+
+  // LIGHT AS A CLOCK — publish the continuous clock to the store on every change (autoplay frame OR
+  // scrubber drag). These are plain store values with no React subscribers, so writing them per-frame
+  // costs no re-render; the per-frame useFrame loops (fog, god-rays, warm plankton, each Jellyfish)
+  // read them via getState(). Fog itself is driven imperatively in FogClock below so the murk thickens
+  // 0.09 → 0.15 as the fishery dies without a reactive fogDensity subscription re-rendering the scene.
+  const decadeCount = Math.max(decades.length - 1, 1)
+  useEffect(() => {
+    const p = decade / decadeCount
+    useBloomControls.setState({ decadeF: decade, decadeProgress: p })
+  }, [decade, decadeCount])
+
+  // current year, continuous (1950..2018), for the scrubber readout
+  const year = Math.round(1950 + (decade / decadeCount) * spanYears)
 
   const bloomIntensity = useBloomControls((s) => s.bloomIntensity)
   const bloomThreshold = useBloomControls((s) => s.bloomThreshold)
   const bloomRadius = useBloomControls((s) => s.bloomRadius)
   const grain = useBloomControls((s) => s.grain)
   const vignette = useBloomControls((s) => s.vignette)
-  const fogDensity = useBloomControls((s) => s.fogDensity)
 
   return (
     <div className="bloom">
@@ -127,7 +157,8 @@ export function BloomRenderer({
         >
           <color attach="background" args={['#02080e']} />
           <TankBackground />
-          <fogExp2 attach="fog" args={['#071a26', fogDensity]} />
+          <fogExp2 attach="fog" args={['#071a26', 0.09]} />
+          <FogClock />
           <ambientLight intensity={0.2} />
           <pointLight position={[-2, 12, 5]} intensity={0.5} color="#8fd4e6" />
           <Atmosphere />
@@ -145,9 +176,11 @@ export function BloomRenderer({
             <Jellyfish
               key={spec.id}
               spec={spec}
+              stock={stocks[i]}
               position={positions[i]}
               selected={spec.id === selectedId}
               dimmed={hasSelection && spec.id !== selectedId}
+              focal={spec.id === focalId}
               onSelect={() => onSelect(spec.id)}
             />
           ))}
@@ -172,18 +205,24 @@ export function BloomRenderer({
         </Canvas>
         <div className="bloom-hint mono">drag to orbit · scroll to zoom · click a medusa</div>
 
-        {/* decade scrubber — autoplays on load (the tank goes dark on its own), then drag to explore */}
+        {/* CONTINUOUS year scrubber — autoplays a smooth 1950→2018 sweep on load (the tank goes dark on
+            its own), then drag to explore. Fine step so a hand-drag flows like the autoplay, not in
+            decade jumps. The readout is the live year; the caption tells the viewer the dimming light
+            is the fishery's decline, so it never reads as a render bug. */}
         <div className={`scrubber${autoplaying ? ' is-playing' : ''}`}>
-          <span className="scrubber-decade mono">{decades[decade]}</span>
+          <span className="scrubber-decade mono">{year}</span>
           <input
             type="range"
             min={0}
             max={6}
+            step={0.02}
             value={decade}
             onChange={(e) => onDecade(Number(e.target.value))}
-            aria-label="decade"
+            aria-label="year"
           />
-          <span className="scrubber-hint mono">{autoplaying ? 'playing 1950 → 2018 · drag to explore' : 'drag the years'}</span>
+          <span className="scrubber-hint mono">
+            {autoplaying ? 'the light going out = the fishery’s decline' : 'drag the years · 1950 → 2018'}
+          </span>
         </div>
       </div>
 
@@ -236,6 +275,25 @@ export function BloomRenderer({
 
 import { FATE_COLOR, type Fate } from '@/data/bloom'
 const FATE_HEX = (f: Fate) => FATE_COLOR[f]
+
+// The murk thickens as the fishery dies — driven imperatively from the store clock so continuous time
+// costs no per-frame React re-render. Eases the scene fogExp2 density (and mirrors it into the store's
+// fogDensity, which the custom shaders read via getState()) from clear water (0.09) toward murk (0.15).
+// Capped at 0.15 so the 8 collapsed + 3 husk creatures stay individually countable in the 2018 frame.
+function FogClock() {
+  const { scene } = useThree()
+  useFrame(() => {
+    const p = useBloomControls.getState().decadeProgress
+    const target = 0.09 + (0.15 - 0.09) * p
+    const fog = scene.fog as THREE.FogExp2 | null
+    if (fog && 'density' in fog) {
+      fog.density += (target - fog.density) * 0.06 // ease so a scrub isn't a snap
+      if (useBloomControls.getState().fogDensity !== fog.density)
+        useBloomControls.setState({ fogDensity: fog.density }) // keep shaders' getState() read in sync
+    }
+  })
+  return null
+}
 
 // A slow cinematic camera drift — a high reveal that cranes down and around to the hero, then a
 // sustained orbit. Yields to any user drag/zoom and eases back in after an idle beat. Verbatim from
@@ -367,7 +425,9 @@ function TankBackground() {
   })
   return (
     <mesh scale={60} frustumCulled={false} renderOrder={-100}>
-      <sphereGeometry args={[1, 128, 128]} />
+      {/* 64×64 is plenty: the vertex shader only normalizes position, so the gradient+neuro-noise is
+          entirely pixel-driven — ~32k tris → ~8k tris is visually identical. */}
+      <sphereGeometry args={[1, 64, 64]} />
       <shaderMaterial
         ref={mat}
         uniforms={uniforms}
