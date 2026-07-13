@@ -307,7 +307,6 @@ function CinematicCamera({ controls }: { controls: RefObject<ComponentRef<typeof
   const firstRun = useRef(true)
   const lastNonce = useRef(0)
   const sph = useMemo(() => new THREE.Spherical(), [])
-  const tgt = useMemo(() => new THREE.Vector3(), [])
   const want = useMemo(() => new THREE.Vector3(), [])
 
   useEffect(() => {
@@ -386,22 +385,62 @@ function CinematicCamera({ controls }: { controls: RefObject<ComponentRef<typeof
       : { az: b.az + START_AZ_OFF, pol: Math.min(b.pol, START_POL), rad: b.rad * START_RAD_MUL }
     const HERO = authored ? camEnd! : { az: b.az, pol: b.pol, rad: b.rad * HERO_RAD_MUL }
 
-    const ORBIT_SPEED = 0.06
+    // ── ESTABLISHING CRANE (unchanged intent): descend from the high, wide START to the settled HERO
+    // framing, winding a gentle net orbit so the reveal arcs IN rather than just dropping straight down.
+    const ORBIT_SPEED = 0.05
     const orbit = ORBIT_SPEED * (t - TAU * (1 - Math.exp(-t / TAU)))
     const heroAz = HERO.az + orbit
-    const az = START.az + (heroAz - START.az) * descend
-    const pol = START.pol + (HERO.pol - START.pol) * descend + Math.sin(t * 0.05) * 0.02 * driftAmount
-
+    const baseAz = START.az + (heroAz - START.az) * descend
+    const basePol = START.pol + (HERO.pol - START.pol) * descend
     const settledRad = START.rad + (HERO.rad - START.rad) * drawIn
-    const PULL = 0.28 * driftAmount
-    const rad = settledRad * (1 - PULL * drawIn * Math.sin(t * 0.24))
-    tgt.copy(c.target)
+
+    // ── DIVER-CAM — once the crane settles, the camera stops behaving like a tripod on a turntable
+    // circling a tank and starts behaving like a National Geographic operator in neutral buoyancy in
+    // the deep: it drifts THROUGH the bloom, its look-point wandering across the swarm, with slow
+    // non-circular dolly pushes-and-retreats, a buoyant bob, and a touch of handheld roll — never a
+    // clean circle. Everything is a sum of sines at incommensurate (irrational-ish) frequencies so the
+    // path has no repeating period and never reads as a loop. It FADES IN as the establishing crane
+    // completes (t 4s→9s) so it doesn't fight the reveal, and is full-strength on every later drift-in.
+    const diver = establishing ? THREE.MathUtils.smoothstep(t, 4.0, 9.0) : 1.0
+    const A = driftAmount * diver
+    // two-octave sine wander: two incommensurate frequencies so it wanders like a current, not a wave.
+    const w = (f1: number, a1: number, f2: number, a2: number, ph: number) =>
+      a1 * Math.sin(t * f1 + ph) + a2 * Math.sin(t * f2 + ph * 1.7)
+
+    const az = baseAz + w(0.037, 0.17, 0.019, 0.11, 0.0) * A // drift around the bloom, not a clean circle
+    const pol = basePol + w(0.028, 0.10, 0.015, 0.05, 2.1) * A // the eye-line rises and sinks
+    // slow dolly: push IN toward the bloom then pull back OUT (a diver approaching subjects and easing
+    // off), plus a faint faster breath on the radius. During establishing keep the old gentle pull.
+    const dolly = 1 + (w(0.023, 0.11, 0.041, 0.05, 4.3) + 0.018 * Math.sin(t * 0.6)) * A
+    const rad = establishing
+      ? settledRad * (1 - 0.06 * drawIn * Math.sin(t * 0.24)) * dolly
+      : settledRad * dolly
+
+    // the LOOK-POINT drifts through the swarm (the operator tracking subjects), so the framing isn't
+    // pinned dead-centre. Ease OrbitControls' own target toward the wander point so c.update() looks
+    // there — and so a later user-orbit pivots around wherever the camera had drifted to. Bounded +
+    // slight downward bias (peering into the deep). Lerped (not set) so resuming from a user drag eases
+    // in without a snap. During establishing A≈0, so the target stays at origin for a clean crane.
+    const tx = w(0.024, 2.0, 0.013, 1.2, 0.5) * A
+    const ty = (w(0.020, 1.1, 0.038, 0.5, 3.4) - 0.4) * A
+    const tz = w(0.017, 1.7, 0.031, 0.9, 1.2) * A
+    c.target.x += (tx - c.target.x) * Math.min(1, dt * 1.5)
+    c.target.y += (ty - c.target.y) * Math.min(1, dt * 1.5)
+    c.target.z += (tz - c.target.z) * Math.min(1, dt * 1.5)
+
     sph.set(rad, pol, az)
     sph.makeSafe()
-    want.setFromSpherical(sph).add(tgt)
+    want.setFromSpherical(sph).add(c.target)
+    // buoyant bob on the camera body itself — a small, slightly faster vertical breath (the operator
+    // floating in place), layered so it doesn't beat against the eye-line wander.
+    want.y += (0.14 * Math.sin(t * 0.9 + 1.0) + 0.06 * Math.sin(t * 1.7)) * A
     camera.position.copy(want)
-    camera.lookAt(tgt)
-    c.update()
+    c.update() // orients the camera to look at c.target (the wandering look-point)
+    // handheld ROLL — a subtle tilt around the view axis so the horizon isn't locked dead-flat. Applied
+    // AFTER c.update() (which enforces up-vector); re-applied each frame, and harmless to orbit state
+    // (OrbitControls derives its angles from camera POSITION, not roll).
+    const roll = (0.02 * Math.sin(t * 0.23) + 0.011 * Math.sin(t * 0.52 + 2.0)) * A
+    camera.rotateZ(roll)
   })
   return null
 }
