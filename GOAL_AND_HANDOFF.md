@@ -2,11 +2,11 @@
 
 ## Primary Objective
 
-Use these reference images:
+Use these reference images (committed in `docs/references/`):
 
-- `/mnt/c/Users/sunsanju/Downloads/w3ADGFqrM3IChlMhj1q5--1--r4uvg.webp`
-- `/mnt/c/Users/sunsanju/Downloads/images.jpg`
-- `/mnt/c/Users/sunsanju/Downloads/ai-generated-glowing-sea-jellyfishes-on-dark-background-neural-network-generated-image-photo.jpg`
+- `docs/references/ref-01-glowing-bells.webp`
+- `docs/references/ref-02-jellyfish.jpg`
+- `docs/references/ref-03-glowing-sea-jellyfishes.jpg`
 
 Transform **Bloom & Bust** into a world-class interactive Three.js data-art experience suitable as an exemplar for `r/dataisbeautiful`. Match the references’ bioluminescence, dramatic underwater lighting, translucent and segmented bells, rich internal anatomy, layered ruffled oral arms, and dense hair-fine tentacles—while preserving the core data metaphor that fish-stock decline causes jellyfish to grow, brighten, and flourish, along with all timeline, playback, scrubbing, selection, and encoded-data behavior.
 
@@ -17,7 +17,7 @@ Do not stop at technical correctness: refine lighting, materials, geometry, moti
 ## Project Context
 
 - Repository: `bloom-and-bust`
-- Local path used during this work: `~/projects/medusa-bloom`
+- Local path used during this work: `~/projects/bloom-and-bust`
 - Stack: React 19, TypeScript, Vite, Three.js, React Three Fiber, Drei, custom GLSL, postprocessing, Zustand, Leva.
 - Static client-only site; no backend.
 - Main files:
@@ -104,7 +104,7 @@ This caused misleading visual comparisons.
 Use the real Vite server instead:
 
 ```bash
-cd ~/projects/medusa-bloom
+cd ~/projects/bloom-and-bust
 npm install
 npm run dev
 ```

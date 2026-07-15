@@ -2,7 +2,7 @@
 
 **Status:** BUILT + verified in-browser (1950 / 1985 / 2018 + full beat arc), lint + build green. Uncommitted
 on `master` (commit only when Sanju says so). Pre-inversion checkpoint safe in `git stash@{0}` — do NOT pop.
-**Project:** `/home/sunsanju/projects/medusa-bloom` · **Dev:** `pnpm dev` (:5173/:5174) · **Gate:** `pnpm lint` then `pnpm build`
+**Project:** `/home/sunsanju/projects/bloom-and-bust` · **Dev:** `pnpm dev` (:5173/:5174) · **Gate:** `pnpm lint` then `pnpm build`
 
 > This records what SHIPPED. An earlier auto-generated version of this doc proposed a different beat design
 > (`beatT0`/`beatFired` + a Canvas-side `BeatClock`, inflection 2.5, decadeF sweeping independently). That
