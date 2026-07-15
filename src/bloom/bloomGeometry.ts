@@ -112,24 +112,24 @@ export function makeTentacleGeometry(length: number, thick: boolean): THREE.Tube
     pts.push(new THREE.Vector3(lean, -t * length, 0))
   }
   const curve = new THREE.CatmullRomCurve3(pts)
-  // 5 radial segments: at tube radius 0.014–0.035 the cross-section is sub-pixel, so 5 vs 8 rings is
-  // imperceptible; keep tubularSegments=36 (the sway wave needs the length resolution).
-  const g = new THREE.TubeGeometry(curve, segs, thick ? 0.035 : 0.014, 5, false)
-  // taper the final 20% by scaling the tube's radial ring toward the tip
+  // Thinner base radius than before (0.014→0.009) so the trail reads as a delicate filament, not a
+  // thick blade — with additive blending + Bloom, a fat tube halos into a wide green streak that swamps
+  // the bell. 5 radial segments is plenty at this sub-pixel cross-section; tubularSegments=36 for the sway wave.
+  const g = new THREE.TubeGeometry(curve, segs, thick ? 0.022 : 0.009, 5, false)
+  // ORGANIC TAPER — a real tentacle is thick at the bell and tapers to a wisp, not a uniform rod that
+  // only pinches at the very tip. Scale EVERY radial ring toward the centerline by a full-length taper
+  // (≈1 at the anchor → ≈0.12 at the tip, curved), so the trail thins continuously and dissolves away
+  // instead of hanging as a solid strip. This is the single biggest "reads as a living tentacle" lever.
   const posAttr = g.attributes.position as THREE.BufferAttribute
   const uvAttr = g.attributes.uv as THREE.BufferAttribute
   for (let i = 0; i < posAttr.count; i++) {
-    const t = uvAttr.getX(i) // TubeGeometry uv.x runs along the length
-    if (t > 0.8) {
-      const k = Math.sqrt(Math.max(0, (1 - t) / 0.2))
-      // pull the ring toward the centerline (approximate: scale x/z around the local axis point)
-      // centerline point at this t:
-      const cp = curve.getPoint(t)
-      const px = posAttr.getX(i),
-        py = posAttr.getY(i),
-        pz = posAttr.getZ(i)
-      posAttr.setXYZ(i, cp.x + (px - cp.x) * k, py, cp.z + (pz - cp.z) * k)
-    }
+    const t = uvAttr.getX(i) // TubeGeometry uv.x runs along the length (0 anchor → 1 tip)
+    const k = Math.pow(1 - t, 0.7) * 0.88 + 0.12 // full-length taper: ~1 at root, ~0.12 at tip
+    const cp = curve.getPoint(t)
+    const px = posAttr.getX(i),
+      py = posAttr.getY(i),
+      pz = posAttr.getZ(i)
+    posAttr.setXYZ(i, cp.x + (px - cp.x) * k, py, cp.z + (pz - cp.z) * k)
   }
   posAttr.needsUpdate = true
   return g
@@ -152,7 +152,18 @@ export function makeRibbonGeometry(length: number): THREE.PlaneGeometry {
   g.rotateZ(Math.PI / 2) // now length is along X... map by remapping uv below
   // simpler: build unrotated, then remap in the shader via uv.y. But swayVertex reads uv.x as arc.
   // Reset and rebuild with arc on uv.x:
-  const g2 = new THREE.PlaneGeometry(length, 0.4, 28, 3)
+  const g2 = new THREE.PlaneGeometry(length, 0.26, 28, 3)
+  // TAPER the ribbon along its length so the oral arm narrows to a point like the tentacles, instead of
+  // a uniform 0.4-wide banner (which, additive + bloomed, read as a broad green blade). Width scales from
+  // full at the anchor (local x=-length/2) to a wisp at the tip. Also narrower base (0.4→0.26).
+  const rp = g2.attributes.position as THREE.BufferAttribute
+  for (let i = 0; i < rp.count; i++) {
+    const x = rp.getX(i) // -length/2 (anchor) → +length/2 (tip)
+    const along = (x + length / 2) / length // 0 anchor → 1 tip
+    const taper = Math.pow(1 - along, 0.6) * 0.85 + 0.15
+    rp.setY(i, rp.getY(i) * taper)
+  }
+  rp.needsUpdate = true
   // center it so the anchor (uv.x=0 → local x=-length/2) sits at origin; translate +length/2, then
   // rotate to hang downward.
   g2.translate(length / 2, 0, 0)

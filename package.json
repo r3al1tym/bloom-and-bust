@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "A drift of jellyfish, each one a fish stock — 70 years of North Atlantic fisheries, rendered from AWS Open Data.",
+  "description": "A drift of jellyfish embodying 70 years of reconstructed Northeast Atlantic catch, rendered from AWS Open Data.",
   "scripts": {
     "extract": "tsx scripts/extract.ts",
     "dev": "vite",

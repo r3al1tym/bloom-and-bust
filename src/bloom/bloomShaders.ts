@@ -153,6 +153,7 @@ export const bellFragment = /* glsl */ `
   uniform float uThicknessPow; // backlight transmission falloff
   uniform float uSeed;
   uniform float uGlowBoost;    // live-tuning multiplier on the emissive (1.0 = as authored)
+  uniform float uPulseRate;    // the bell's jet rate — reused here to flash the margin ON the contraction
 
   varying vec3 vWorldPos;
   varying vec3 vViewDir;
@@ -228,6 +229,17 @@ export const bellFragment = /* glsl */ `
     float bl = max(max(bodyGlow.r, bodyGlow.g), bodyGlow.b);
     if (bl > 0.85) bodyGlow = mix(bodyGlow, satHue * bl, clamp((bl - 0.85) * 1.1, 0.0, 0.9));
     vec3 edge = rim * (0.3 + 0.5 * uAlive) + body * vFrill * 0.28 * (0.4 + uAlive);
+
+    // ── #1 PULSE-SYNCED MARGIN BIOLUMINESCENCE — the lace rim flashes softly on each contraction, the
+    // way Aequorea flare at the bell margin. It RECONSTRUCTS the exact vertex jet phase (bellVertex:
+    // travel = phase - (1-h)*2.5) so light and breath physically cannot disagree. Positive half only,
+    // cubed → a sharp flare on the peak of the squeeze that decays fast. Multiplies body (fate-tinted,
+    // never rimGlow so it never whitens) x vFrill (margin-weighted) x uAlive (a husk never flashes).
+    // The flash cadence follows uPulseRate for free: ~2.7s alive, ~12s husk.
+    float mTravel = uTime * uPulseRate + uSeed * 6.2831853 - (1.0 - vHeight) * 2.5;
+    float flash = pow(max(sin(mTravel), 0.0), 3.0);
+    edge += body * vFrill * flash * 0.35 * uAlive;
+
     vec3 col = bodyGlow + edge;
 
     // NormalBlending; density scales with aliveness so a husk stays wispy and a sealed bell is
@@ -261,11 +273,13 @@ export const bellFragment = /* glsl */ `
 export const swayVertex = /* glsl */ `
   uniform float uTime;
   uniform float uSeed;
-  uniform float uAmp;       // sway amplitude (0 if severed)
-  uniform float uFreq;      // SLOW — 0.6..1.0
-  uniform float uLag;       // ~5, so the wave visibly travels tip-ward
-  uniform float uStiff;     // ~1.8, so the tip lags well behind the anchor
-  uniform float uTwist;     // ribbons only — twist around the tangent
+  uniform float uAmp;        // sway amplitude (0 if severed)
+  uniform float uFreq;       // SLOW — 0.6..1.0
+  uniform float uLag;        // ~5, so the wave visibly travels tip-ward
+  uniform float uStiff;      // ~1.8, so the tip lags well behind the anchor
+  uniform float uTwist;      // ribbons only — twist around the tangent
+  uniform float uSurgePhase; // the bell's jet phase (t*pulseRate + seed·2π) — couples the trail to the pulse
+  uniform float uSurgeDepth; // = pDepth·stillness (0.02→0.22 alive, →0 as it dies)
   varying vec2 vUv;
   varying float vT;
   varying float vFogDepth;
@@ -288,6 +302,20 @@ export const swayVertex = /* glsl */ `
     p.z += cos(ph * 0.83 + uSeed) * uAmp * w * 0.8;
     // a touch of non-periodic drift so the bundle never combs into one line
     p.x += sin(uTime * 0.37 + t * 3.1 + uSeed * 5.0) * uAmp * 0.15 * w;
+
+    // ── JET-RECOIL SURGE — the bundle whips taut UP toward the bell on the contraction kick, then
+    // streams back down/out on the slow glide (overlapping action off the SAME jet phase as the bell).
+    // The recoil travels tip-ward with the same arc-weight (pow(t,uStiff)), so the tip reacts late — a
+    // real inertial whip. The skewed sine (fast up-stroke pow .6, slow relax pow 1.4) matches the bell's
+    // own asymmetry. step(uAmp) → a severed stub (uAmp=0) never surges. Gathers xz inward on the kick so
+    // it doesn't just translate. Bounded by uSurgeDepth (≤0.22), well under the sink/lift budget.
+    float lag = uSurgePhase - t * 2.5;
+    float ss = sin(lag);
+    float surge = (ss > 0.0 ? pow(ss, 0.6) : -pow(-ss, 1.4)) * uSurgeDepth;
+    float alive = step(0.0001, uAmp);
+    float ww = pow(t, uStiff) * alive;
+    p.y += surge * ww * 1.1;
+    p.xz *= (1.0 - surge * ww * 0.25);
 
     vec4 mv = modelViewMatrix * vec4(p, 1.0);
     vFogDepth = -mv.z;
@@ -314,8 +342,11 @@ export const swayFragment = /* glsl */ `
     float glow = mix(1.0, 0.28, vT);
     vec3 lift = uColor + vec3(0.08, 0.10, 0.10);          // same hue, a touch brighter — never white
     vec3 tint = mix(uColor, lift, smoothstep(0.15, 0.9, vT) * 0.4);
-    vec3 col = tint * (0.42 + 0.5 * glow);
-    float a = uOpacity * (0.72 - 0.4 * vT);
+    // dimmer trails: the tentacles are SUPPORTING structure, not the subject — the bell is. Lowered the
+    // luminance (0.42+0.5→0.30+0.4) and the base alpha (0.72→0.5) so many additive trails sum to a faint
+    // coloured haze the bell floats above, rather than a field of bright green blades competing with it.
+    vec3 col = tint * (0.30 + 0.4 * glow);
+    float a = uOpacity * (0.5 - 0.32 * vT);
     if (uAdvisory > 0.5) {                 // DT: visibly not load-bearing
       col = mix(col, vec3(dot(col, vec3(0.33))), 0.55);
       a *= 0.4;

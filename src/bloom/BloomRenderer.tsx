@@ -19,10 +19,10 @@ import {
 } from '@react-three/postprocessing'
 import { ToneMappingMode, BlendFunction } from 'postprocessing'
 import * as THREE from 'three'
-import { buildBloom, type BloomSpec } from './bloomModel'
+import { buildBloom, visualsAsOf, type BloomSpec } from './bloomModel'
 import { Jellyfish } from './Jellyfish'
 import { Atmosphere } from './Atmosphere'
-import { useBloomControls, liveCamPose } from './bloomControls'
+import { useBloomControls, liveCamPose, worldDarkness, beatEnvelope } from './bloomControls'
 import { BloomControlPanel } from './BloomControlPanel'
 import type { Stock } from '@/data/bloom'
 import './bloom.css'
@@ -127,6 +127,8 @@ export function BloomRenderer({
   }, [baseSpecs])
   const hasSelection = selectedId != null
   const controls = useRef<ComponentRef<typeof OrbitControls>>(null)
+  const ambientRef = useRef<THREE.AmbientLight>(null) // #1 — dimmed/cooled by WorldDarkClock as the sea dies
+  const pointRef = useRef<THREE.PointLight>(null)
   const detail = stocks.find((s) => s.id === selectedId) ?? null
 
   // RESET — snap the camera back to the canonical opening pose and replay the establishing crane, then
@@ -141,7 +143,8 @@ export function BloomRenderer({
       c.update()
     }
     onSelect(null) // drop any open caption so the reset frame is the clean opening
-    useBloomControls.setState((s) => ({ replayNonce: s.replayNonce + 1 }))
+    // clear the scripted beat too so a reset re-arms it (App.tsx also re-arms its own hasFiredBeat)
+    useBloomControls.setState((s) => ({ replayNonce: s.replayNonce + 1, beatActive: false, beatT: 0, beatPhase: 'idle' }))
     onReset?.()
   }
 
@@ -153,8 +156,15 @@ export function BloomRenderer({
   const decadeCount = Math.max(decades.length - 1, 1)
   useEffect(() => {
     const p = decade / decadeCount
-    useBloomControls.setState({ decadeF: decade, decadeProgress: p })
-  }, [decade, decadeCount])
+    // AGGREGATE BLOOM LEVEL — mean over the 28 stocks of (1 - glow) at the live decade, the exact
+    // per-creature `collapse` averaged. Computed ONCE here (28 cheap pure calls, no re-render — plain
+    // store write with no subscribers) so darkness-rise / uniformity / the beat all read one honest
+    // number rather than re-deriving it per creature.
+    let sum = 0
+    for (const s of stocks) sum += 1 - visualsAsOf(s, decade).glow
+    const bloomLevel = sum / Math.max(1, stocks.length)
+    useBloomControls.setState({ decadeF: decade, decadeProgress: p, bloomLevel })
+  }, [decade, decadeCount, stocks])
 
   // current year, continuous (1950..2018), for the scrubber readout
   const year = Math.round(1950 + (decade / decadeCount) * spanYears)
@@ -179,8 +189,9 @@ export function BloomRenderer({
           <TankBackground />
           <fogExp2 attach="fog" args={['#071a26', 0.09]} />
           <FogClock />
-          <ambientLight intensity={0.2} />
-          <pointLight position={[-2, 12, 5]} intensity={0.5} color="#8fd4e6" />
+          <WorldDarkClock ambient={ambientRef} point={pointRef} />
+          <ambientLight ref={ambientRef} intensity={0.2} />
+          <pointLight ref={pointRef} position={[-2, 12, 5]} intensity={0.5} color="#8fd4e6" />
           <Atmosphere />
           <OrbitControls
             ref={controls}
@@ -272,7 +283,7 @@ export function BloomRenderer({
             style={{ ['--fill' as string]: `${(decade / 6) * 100}%` }}
           />
           {playing && (
-            <span className="scrubber-hint">the light going out is the fishery’s decline</span>
+            <span className="scrubber-hint">the light follows catch falling from historical peaks</span>
           )}
         </div>
       </div>
@@ -282,18 +293,20 @@ export function BloomRenderer({
       <aside className="bloom-side">
         <h1 className="bloom-h1">Bloom &amp; Bust</h1>
         <p className="bloom-lede">
-          Each jellyfish is a fish stock of the {region}, {span}. Scrub the years; the tank thins as the
-          fisheries fall.
+          Fish declines can help jellyfish flourish. Here that ecological pattern becomes a metaphor:
+          28 medusae embody reconstructed {region} catch from {span}. Their changing bodies show catch
+          relative to each taxon's observed peak — not measured jellyfish abundance or an independent
+          stock assessment.
         </p>
         <details className="bloom-anatomy-fold">
           <summary className="bloom-anatomy-cue mono">Read the bodies</summary>
           <ul className="bloom-anatomy">
-            <li><b>Bell size</b> — the stock's total catch</li>
-            <li><b>Hue</b> — its fate vs its own historical peak</li>
-            <li><b>Pulse</b> — <i>thriving</i> breathes slow · <i>declining</i> flutters · a <i>husk</i> is nearly still</li>
-            <li><b>7 tentacles</b> — the seven decades; a <i>stump</i> where it collapsed</li>
+            <li><b>Bell size</b> — the taxon's lifetime reconstructed catch</li>
+            <li><b>Hue</b> — catch relative to its own observed peak</li>
+            <li><b>Pulse</b> — near-peak catch breathes slow · lower catch fades and stills</li>
+            <li><b>7 tentacles</b> — seven decade buckets; a <i>stump</i> once catch fell below one-third of peak</li>
             <li><b>Oral arms</b> — the share of catch on the official books</li>
-            <li><b>Stings</b> — dead bycatch discarded at sea</li>
+            <li><b>Stings</b> — catch discarded at sea</li>
             <li><b>Two-tone</b> — industrial vs small-scale fleet</li>
           </ul>
         </details>
@@ -318,7 +331,7 @@ export function BloomRenderer({
           </div>
         )}
         <p className="bloom-src mono">
-          Data: <a href={sourceUrl} target="_blank" rel="noreferrer">{source}</a> · three.js, client-side.
+          Catch data: <a href={sourceUrl} target="_blank" rel="noreferrer">{source}</a> · three.js, client-side.
         </p>
       </div>
     </div>
@@ -342,6 +355,41 @@ function FogClock() {
       fog.density += (target - fog.density) * 0.06 // ease so a scrub isn't a snap
       if (useBloomControls.getState().fogDensity !== fog.density)
         useBloomControls.setState({ fogDensity: fog.density }) // keep shaders' getState() read in sync
+    }
+  })
+  return null
+}
+
+// #1 DARKNESS RISES — the master light levers. As the fishery collapses the whole SCENE loses its own
+// light so the emissive bloom is all that's left: tone-mapping exposure drops (ACES applies exposure
+// pre-fit, so this ~halves the linear gain on the dark water while the HDR glow cores stay on the ACES
+// shoulder → the bloom reads as self-lit and GAINS contrast as the water falls away), and the fill
+// lights dim + go cold. Exposure is FLOORED at 0.60 so the 28 bell silhouettes never crush out — the
+// cardinal failure. worldDarkness(0)=0 so at 1950 exposure=1.15 / lights=baseline (frame unchanged).
+function WorldDarkClock({ ambient, point }: { ambient: RefObject<THREE.AmbientLight | null>; point: RefObject<THREE.PointLight | null> }) {
+  const gl = useThree((s) => s.gl)
+  const baseKey = useMemo(() => new THREE.Color('#8fd4e6'), [])
+  const deadKey = useMemo(() => new THREE.Color('#24424a'), [])
+  useFrame(() => {
+    const st = useBloomControls.getState()
+    const d = worldDarkness(st.decadeProgress)
+    // #4 THE BEAT rides ON TOP of the steady-state darkness: `dark` pushes exposure toward black through
+    // fade+black, `ignite` lifts it back as the light returns. When the beat is active we ease faster so
+    // the ~1.4s snap actually lands (the 0.06 low-pass is tuned for a slow scrub, too slow for the beat).
+    const env = st.beatActive ? beatEnvelope(st.beatPhase, st.beatT) : { dark: 0, ignite: 0 }
+    const ease = st.beatActive ? 0.22 : 0.06
+    // exposure: steady-state floor 0.60, dropped toward ~0.06 by the beat's dark, lifted +0.5 by ignite.
+    const expBase = Math.max(0.6, 1.15 - 0.55 * d)
+    const expTarget = expBase * (1 - 0.9 * env.dark) + 0.5 * env.ignite
+    gl.toneMappingExposure += (expTarget - gl.toneMappingExposure) * ease
+    if (ambient.current) {
+      const at = (0.2 - 0.13 * d) * (1 - env.dark) + 0.15 * env.ignite
+      ambient.current.intensity += (at - ambient.current.intensity) * ease
+    }
+    if (point.current) {
+      const pt = (0.5 - 0.4 * d) * (1 - env.dark) + 0.4 * env.ignite
+      point.current.intensity += (pt - point.current.intensity) * ease
+      point.current.color.copy(baseKey).lerp(deadKey, d) // teal fill cools to a dead slate
     }
   })
   return null
@@ -439,8 +487,13 @@ function CinematicCamera({ controls }: { controls: RefObject<ComponentRef<typeof
 
     // ── ESTABLISHING CRANE (unchanged intent): descend from the high, wide START to the settled HERO
     // framing, winding a gentle net orbit so the reveal arcs IN rather than just dropping straight down.
-    const ORBIT_SPEED = 0.05
-    const orbit = ORBIT_SPEED * (t - TAU * (1 - Math.exp(-t / TAU)))
+    // BOUNDED: the arc-in settles to a fixed net azimuth (~0.6 rad) via a saturating exp, instead of the
+    // old `t - TAU·(1-exp)` term that grew LINEARLY forever — that endless slow rotation was the
+    // "turntable orbit" read. Once the crane lands, this contributes NO ongoing rotation; the only
+    // sustained camera motion is the bounded diver-drift below (wander + dolly + bob), so the camera
+    // behaves like a diver holding on a subject and drifting, never a tripod circling a tank.
+    const ORBIT_ARC = 0.6 // total radians the establishing crane winds in, then holds
+    const orbit = establishing ? ORBIT_ARC * (1 - Math.exp(-t / TAU)) : ORBIT_ARC
     const heroAz = HERO.az + orbit
     const baseAz = START.az + (heroAz - START.az) * descend
     const basePol = START.pol + (HERO.pol - START.pol) * descend
@@ -451,31 +504,37 @@ function CinematicCamera({ controls }: { controls: RefObject<ComponentRef<typeof
     // the deep: it drifts THROUGH the bloom, its look-point wandering across the swarm, with slow
     // non-circular dolly pushes-and-retreats, a buoyant bob, and a touch of handheld roll — never a
     // clean circle. Everything is a sum of sines at incommensurate (irrational-ish) frequencies so the
-    // path has no repeating period and never reads as a loop. It FADES IN as the establishing crane
-    // completes (t 4s→9s) so it doesn't fight the reveal, and is full-strength on every later drift-in.
-    const diver = establishing ? THREE.MathUtils.smoothstep(t, 4.0, 9.0) : 1.0
+    // path has no repeating period and never reads as a loop. It FADES IN only AFTER the establishing
+    // crane has fully LANDED (t 10s→16s) so the opening reveal stays a pure, still, mysterious crane-down
+    // — the diver wander/roll/dolly must never smear over the descent (that was the intro regression).
+    // Full-strength on every later drift-in (non-establishing), where it's the only camera motion.
+    const diver = establishing ? THREE.MathUtils.smoothstep(t, 10.0, 16.0) : 1.0
     const A = driftAmount * diver
     // two-octave sine wander: two incommensurate frequencies so it wanders like a current, not a wave.
     const w = (f1: number, a1: number, f2: number, a2: number, ph: number) =>
       a1 * Math.sin(t * f1 + ph) + a2 * Math.sin(t * f2 + ph * 1.7)
 
-    const az = baseAz + w(0.037, 0.17, 0.019, 0.11, 0.0) * A // drift around the bloom, not a clean circle
-    const pol = basePol + w(0.028, 0.10, 0.015, 0.05, 2.1) * A // the eye-line rises and sinks
-    // slow dolly: push IN toward the bloom then pull back OUT (a diver approaching subjects and easing
-    // off), plus a faint faster breath on the radius. During establishing keep the old gentle pull.
-    const dolly = 1 + (w(0.023, 0.11, 0.041, 0.05, 4.3) + 0.018 * Math.sin(t * 0.6)) * A
+    // ── DIVER DRIFT — assertive enough to read as an operator MOVING through the bloom, not a tripod
+    // holding still. Amplitudes ~2× the old timid wander and a touch faster, so the camera visibly
+    // repositions: swings wide around subjects (az), rises/dives (pol), and the look-point tracks across
+    // the swarm. Still incommensurate sines (no repeating loop) and bounded (never leaves the bloom).
+    const az = baseAz + w(0.045, 0.34, 0.023, 0.20, 0.0) * A // swing wide around the bloom, both sides
+    const pol = basePol + w(0.034, 0.20, 0.018, 0.10, 2.1) * A // the eye-line rises and dives more freely
+    // dolly: decisive pushes IN toward a subject then eases back OUT — a diver closing on something, then
+    // giving it space. Bigger swing (0.11→0.20) so the approach reads as intent, not breathing.
+    const dolly = 1 + (w(0.028, 0.2, 0.047, 0.09, 4.3) + 0.02 * Math.sin(t * 0.6)) * A
     const rad = establishing
       ? settledRad * (1 - 0.06 * drawIn * Math.sin(t * 0.24)) * dolly
       : settledRad * dolly
 
     // the LOOK-POINT drifts through the swarm (the operator tracking subjects), so the framing isn't
     // pinned dead-centre. Ease OrbitControls' own target toward the wander point so c.update() looks
-    // there — and so a later user-orbit pivots around wherever the camera had drifted to. Bounded +
-    // slight downward bias (peering into the deep). Lerped (not set) so resuming from a user drag eases
-    // in without a snap. During establishing A≈0, so the target stays at origin for a clean crane.
-    const tx = w(0.024, 2.0, 0.013, 1.2, 0.5) * A
-    const ty = (w(0.020, 1.1, 0.038, 0.5, 3.4) - 0.4) * A
-    const tz = w(0.017, 1.7, 0.031, 0.9, 1.2) * A
+    // there — and so a later user-orbit pivots around wherever the camera had drifted to. Wider range
+    // (the operator follows creatures across the field) + slight downward bias (peering into the deep).
+    // Lerped (not set) so resuming from a user drag eases in without a snap. During establishing A≈0.
+    const tx = w(0.03, 3.4, 0.017, 1.8, 0.5) * A
+    const ty = (w(0.024, 1.7, 0.041, 0.7, 3.4) - 0.4) * A
+    const tz = w(0.021, 2.6, 0.035, 1.3, 1.2) * A
     c.target.x += (tx - c.target.x) * Math.min(1, dt * 1.5)
     c.target.y += (ty - c.target.y) * Math.min(1, dt * 1.5)
     c.target.z += (tz - c.target.z) * Math.min(1, dt * 1.5)
@@ -499,20 +558,48 @@ function CinematicCamera({ controls }: { controls: RefObject<ComponentRef<typeof
 
 // A dark, mysterious deep-water column: a neuro-noise web (recursive rotating-sine fractal) reads at
 // once as a neural mesh and as underwater caustics. Verbatim from v2 (pure shader, no domain code).
+// #1 DARKNESS RISES: the palette DROWNS toward these near-black targets as the fishery collapses — the
+// bright surface band goes out, the top gradient sinks to black, the caustic web desaturates — so by
+// 2018 the water emits no light of its own and the bloom is the only thing lit. uBottom is left alone
+// (already near-black). Captured from the live uniforms on the first frame so it darkens FROM whatever
+// palette is authored, not a hardcode.
+const TANK_TOP_DEAD = new THREE.Color('#050d12')
+const TANK_CAU_DEAD = new THREE.Color('#17313a')
+const TANK_SUR_DEAD = new THREE.Color('#0c1a22')
 function TankBackground() {
   const mat = useRef<THREE.ShaderMaterial>(null)
   const uniforms = useMemo(
     () => ({
       uTime: { value: 0 },
-      uTop: { value: new THREE.Color('#08202c') },
-      uBottom: { value: new THREE.Color('#02080e') },
-      uCaustic: { value: new THREE.Color('#2688a0') },
-      uSurface: { value: new THREE.Color('#3ea0bc') },
+      // Documentary grade — DEEP WATER, not the surface seen from below. Top gradient is a deep desat
+      // teal (was #08202c, lighter/greener); caustic + surface accents pulled deeper + less electric so
+      // the column reads as light SCATTERING in deep water rather than a bright ceiling of surface caustics.
+      uTop: { value: new THREE.Color('#0a2430') },
+      uBottom: { value: new THREE.Color('#01060a') },
+      uCaustic: { value: new THREE.Color('#1c6f83') },
+      uSurface: { value: new THREE.Color('#2b7e94') },
     }),
     [],
   )
+  const captured = useRef(false)
+  const base = useMemo(() => ({ top: new THREE.Color(), cau: new THREE.Color(), sur: new THREE.Color() }), [])
+  const scratch = useMemo(() => new THREE.Color(), [])
   useFrame((s) => {
-    if (mat.current) mat.current.uniforms.uTime.value = s.clock.elapsedTime * useBloomControls.getState().waterSpeed
+    if (!mat.current) return
+    const u = mat.current.uniforms
+    u.uTime.value = s.clock.elapsedTime * useBloomControls.getState().waterSpeed
+    // capture the authored palette once, then ease each channel toward its drowned target by worldDarkness
+    if (!captured.current) {
+      base.top.copy(u.uTop.value as THREE.Color)
+      base.cau.copy(u.uCaustic.value as THREE.Color)
+      base.sur.copy(u.uSurface.value as THREE.Color)
+      captured.current = true
+    }
+    const d = worldDarkness(useBloomControls.getState().decadeProgress)
+    const ease = 0.06 // low-pass so a scrub glides, matching FogClock / god-rays
+    ;(u.uTop.value as THREE.Color).lerp(scratch.copy(base.top).lerp(TANK_TOP_DEAD, d), ease)
+    ;(u.uCaustic.value as THREE.Color).lerp(scratch.copy(base.cau).lerp(TANK_CAU_DEAD, d), ease)
+    ;(u.uSurface.value as THREE.Color).lerp(scratch.copy(base.sur).lerp(TANK_SUR_DEAD, d), ease)
   })
   return (
     <mesh scale={60} frustumCulled={false} renderOrder={-100}>
@@ -574,10 +661,16 @@ function TankBackground() {
           }
           void main() {
             float h = clamp(vPos.y * 0.5 + 0.5, 0.0, 1.0);
-            vec3 base = mix(uBottom, uTop, pow(h, 1.5));
-            float surface = pow(smoothstep(0.55, 1.0, h), 2.0);
-            base += uSurface * surface * 0.45;
-            float fromAbove = pow(h, 1.3);
+            // steeper falloff (pow 1.5→2.2) so brightness stays LOW through most of the column and only
+            // the very top lifts — deep water is dark nearly everywhere, not a broad glow.
+            vec3 base = mix(uBottom, uTop, pow(h, 2.2));
+            // the light from above is a NARROW, DIM sliver at the very top (smoothstep 0.55→0.82 start,
+            // *0.16 not *0.45) — a hint of a distant surface far overhead, NOT a bright ceiling filling
+            // the top third (which read as "looking up at the ocean surface"). Deep water: the surface is
+            // a faint memory, not a feature.
+            float surface = pow(smoothstep(0.82, 1.0, h), 2.2);
+            base += uSurface * surface * 0.16;
+            float fromAbove = pow(h, 1.6);
             vec3 col = base;
             vec2 web_uv = vPos.xy / (abs(vPos.z) + 0.55);
             web_uv *= 1.15;
@@ -587,12 +680,15 @@ function TankBackground() {
             web = pow(web, 0.7 + 6.0 * 0.30);
             web = min(1.4, web);
             float nodes = smoothstep(0.7, 1.4, web);
-            col += uCaustic * web * (0.14 + 0.5 * fromAbove) * 0.34;
-            col += uSurface * nodes * (0.18 + 0.55 * fromAbove) * 0.28;
+            // the neuro-web is dimmed and pushed DOWN in the column (heavier fromAbove weighting + lower
+            // overall gain) so it reads as faint light scattering in the volume, not a bright caustic NET
+            // across a ceiling — the bright top-biased web was the other half of the "surface-from-below" read.
+            col += uCaustic * web * (0.05 + 0.32 * fromAbove) * 0.22;
+            col += uSurface * nodes * (0.06 + 0.34 * fromAbove) * 0.16;
             float swell = fbm(vec3(vPos.xz * 1.6, uTime * 0.03)) * 0.12;
-            col += uCaustic * swell * (0.35 + 0.65 * fromAbove);
+            col += uCaustic * swell * (0.22 + 0.5 * fromAbove);
             float dust = fbm(vec3(vPos * 14.0 + vec3(uTime * 0.05, uTime * 0.11, 0.0)));
-            col += uSurface * smoothstep(0.72, 1.0, dust) * 0.07;
+            col += uSurface * smoothstep(0.72, 1.0, dust) * 0.05;
             gl_FragColor = vec4(col, 1.0);
           }
         `}

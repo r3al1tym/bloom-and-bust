@@ -1,6 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import { BloomRenderer } from './bloom/BloomRenderer'
 import { loadBloom, type BloomData } from './data/bloom'
+import {
+  useBloomControls,
+  BEAT_INFLECTION_DECADEF,
+  BEAT_ARM_BELOW,
+  BEAT_FADE_S,
+  BEAT_BLACK_S,
+  BEAT_IGNITE_S,
+  BEAT_SETTLE_S,
+  BEAT_TOTAL_S,
+} from './bloom/bloomControls'
 import './app.css'
 
 // The emotional arc plays itself, and time flows CONTINUOUSLY — not in decade jumps. On load the tank
@@ -22,6 +32,29 @@ const invEaseInOut = (y: number) => {
   return c < 0.5 ? Math.sqrt(c / 2) : (2 - Math.sqrt(2 * (1 - c))) / 2
 }
 
+// ── THE SCRIPTED TIPPING-POINT BEAT (technique #4) ──────────────────────────────────────────────────
+// The one place the piece breaks its own pure-f(decadeF) reversibility. When autoplay crosses ~1980
+// going forward, an ~8s beat plays on WALL-CLOCK time: fade→black→ignite→settle. It is the climax that
+// lands the 2018 end-state — during ignite+settle it RAMPS decadeF from the inflection to 6.0 (2018) on
+// an ease-out, so the lights come back on a visibly transformed, full sea, then hands control to the
+// slider at 2018. `beatDecade` maps beat elapsed-seconds → the year the renderer should show; `beatPhase`
+// names the sub-beat for the visual overrides. All from the store's fields (see bloomControls).
+const easeOut = (x: number) => 1 - (1 - x) * (1 - x)
+function beatPhaseAt(elapsedS: number): 'fade' | 'black' | 'ignite' | 'settle' {
+  if (elapsedS < BEAT_FADE_S) return 'fade'
+  if (elapsedS < BEAT_FADE_S + BEAT_BLACK_S) return 'black'
+  if (elapsedS < BEAT_FADE_S + BEAT_BLACK_S + BEAT_IGNITE_S) return 'ignite'
+  return 'settle'
+}
+// the decade the beat is displaying at `elapsedS`: held at the inflection through fade+black, then
+// ramped inflection→6.0 across ignite+settle (ease-out — fastest right as the light returns).
+function beatDecadeAt(elapsedS: number, fromDecade: number): number {
+  const rampStart = BEAT_FADE_S + BEAT_BLACK_S
+  if (elapsedS <= rampStart) return fromDecade
+  const k = Math.min(1, (elapsedS - rampStart) / (BEAT_IGNITE_S + BEAT_SETTLE_S))
+  return fromDecade + (6 - fromDecade) * easeOut(k)
+}
+
 export function App() {
   const [data, setData] = useState<BloomData | null>(null)
   const [err, setErr] = useState<string | null>(null)
@@ -35,6 +68,11 @@ export function App() {
   const progress = useRef(0)
   const lastTs = useRef<number | null>(null)
   const holdUntil = useRef(0)
+  // scripted-beat state: has it fired this forward pass, when (wall-clock ms) it started, and the
+  // decade it fired at (the ramp origin). Kept in refs so the rAF loop drives it without re-render.
+  const hasFiredBeat = useRef(false)
+  const beatStart = useRef<number | null>(null)
+  const beatFromDecade = useRef(0)
 
   useEffect(() => {
     loadBloom().then(setData).catch((e) => setErr(String(e)))
@@ -55,9 +93,46 @@ export function App() {
       }
       const dt = now - lastTs.current
       lastTs.current = now
+
+      // ── SCRIPTED BEAT takes over the playhead while it runs ──────────────────────────────────────
+      if (beatStart.current != null) {
+        const elapsedS = (now - beatStart.current) / 1000
+        if (elapsedS >= BEAT_TOTAL_S) {
+          // beat done — land at 2018 and hand back to the slider (normal progress>=1 stop fires below)
+          beatStart.current = null
+          progress.current = 1
+          setDecade(6)
+          useBloomControls.setState({ beatActive: false, beatT: 0, beatPhase: 'idle' })
+          setPlaying(false)
+          return
+        }
+        const phase = beatPhaseAt(elapsedS)
+        const beatDecade = beatDecadeAt(elapsedS, beatFromDecade.current)
+        // keep `progress` aligned to the ramped decade so a later pause/scrub resumes coherently
+        progress.current = invEaseInOut(beatDecade / 6)
+        useBloomControls.setState({ beatActive: true, beatT: Math.min(1, elapsedS / BEAT_TOTAL_S), beatPhase: phase })
+        setDecade(beatDecade)
+        raf.current = requestAnimationFrame(step)
+        return
+      }
+
       if (now >= holdUntil.current) {
+        const prevDecade = easeInOut(progress.current) * 6
         progress.current = Math.min(1, progress.current + dt / SWEEP_MS)
-        setDecade(easeInOut(progress.current) * 6)
+        const nextDecade = easeInOut(progress.current) * 6
+        // re-arm once we've rewound below the inflection (covers a scrub-back-then-play)
+        if (hasFiredBeat.current && nextDecade < BEAT_ARM_BELOW) hasFiredBeat.current = false
+        // FIRE — a forward crossing of the inflection this frame starts the beat
+        if (!hasFiredBeat.current && prevDecade < BEAT_INFLECTION_DECADEF && nextDecade >= BEAT_INFLECTION_DECADEF) {
+          hasFiredBeat.current = true
+          beatStart.current = now
+          beatFromDecade.current = nextDecade
+          useBloomControls.setState({ beatActive: true, beatT: 0, beatPhase: 'fade' })
+          setDecade(nextDecade)
+          raf.current = requestAnimationFrame(step)
+          return
+        }
+        setDecade(nextDecade)
       }
       if (progress.current >= 1) {
         setPlaying(false) // reached 2018 — stop; the play button will replay from the start
@@ -77,6 +152,13 @@ export function App() {
   const setDecadeManual = (d: number) => {
     setPlaying(false)
     progress.current = invEaseInOut(d / 6)
+    // a manual scrub cancels any in-flight beat and re-arms it once dragged below the inflection, so
+    // scrubbing back and replaying re-fires the tipping point (pure-reversible everywhere else).
+    if (beatStart.current != null) {
+      beatStart.current = null
+      useBloomControls.setState({ beatActive: false, beatT: 0, beatPhase: 'idle' })
+    }
+    if (d < BEAT_ARM_BELOW) hasFiredBeat.current = false
     setDecade(d)
   }
 
@@ -85,6 +167,9 @@ export function App() {
     if (progress.current >= 1) {
       progress.current = 0
       lastTs.current = null
+      hasFiredBeat.current = false // replay from 1950 → the beat can fire again
+      beatStart.current = null
+      useBloomControls.setState({ beatActive: false, beatT: 0, beatPhase: 'idle' })
       setDecade(0)
       setPlaying(true)
       return
@@ -97,6 +182,9 @@ export function App() {
   const reset = () => {
     progress.current = 0
     lastTs.current = null // re-inits the loop's timing → re-applies the opening hold even if mid-play
+    hasFiredBeat.current = false // reset re-arms the tipping-point beat
+    beatStart.current = null
+    useBloomControls.setState({ beatActive: false, beatT: 0, beatPhase: 'idle' })
     setDecade(0)
     setPlaying(true)
   }

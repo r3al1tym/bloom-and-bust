@@ -1,4 +1,4 @@
-// The data contract — a Stock is one fish species aggregated across the NE Atlantic, 1950–2018.
+// The data contract — a Stock is one named taxon aggregated across the NE Atlantic, 1950–2018.
 // Produced by scripts/extract.ts from the Sea Around Us catch data on the AWS Registry of Open
 // Data, then committed to public/data/bloom.json. The renderer OWNS no data and derives nothing
 // about the pipeline — every visible part of a medusa maps to one field below.
@@ -12,14 +12,14 @@ export interface Stock {
   group: string
   status: Fate
   totalTonnes: number
-  /** 0..1 bell size (log tonnage) — the stock's mass. */
+  /** 0..1 bell size (log lifetime catch tonnage). */
   size: number
   /** Catch per decade, 1950s…2010s (seven buckets → seven tentacles). */
   byDecade: number[]
   peakDecade: string
   peakTonnes: number
   lastTonnes: number
-  /** Last decade's catch as a % of the stock's own peak — the collapse figure. */
+  /** Last decade's catch as a % of the taxon's own observed peak. */
   pctOfPeak: number
   /** Tentacle index (0..6) from which the timeline severs; 7 = intact. */
   severFrom: number
@@ -51,10 +51,10 @@ export const FATE_COLOR: Record<Fate, string> = {
 }
 
 export const FATE_LABEL: Record<Fate, string> = {
-  thriving: 'thriving — catch is at or near its historical peak',
-  declining: 'declining — well below peak but still fished',
-  collapsed: 'collapsed — a fraction of what it was',
-  husk: 'a husk — all but gone',
+  thriving: 'near peak — catch is at least two-thirds of its observed peak',
+  declining: 'below peak — catch is one-third to two-thirds of peak',
+  collapsed: 'far below peak — catch is one-tenth to one-third of peak',
+  husk: 'minimal catch — less than one-tenth of peak',
 }
 
 // Pulse behaviour by fate — the bell's "mood".

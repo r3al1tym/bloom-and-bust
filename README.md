@@ -1,31 +1,33 @@
 # Bloom & Bust
 
-*As the fish go bust, the jellyfish bloom.* Overfish a sea and jellyfish move into the empty
-niche — a jellyfish bloom is, ecologically, what a collapsed fishery looks like. So this renders
-70 years of North Atlantic fish stocks **as** a drift of jellyfish: the fuller and greener the
-tank, the healthier the sea; a tank of amber-and-coral husks is a fishery that busted.
+*As the fish go bust, the jellyfish bloom.* Fish declines can create conditions in which jellyfish
+flourish. Bloom & Bust turns that documented ecological pattern into a visual metaphor: 28 medusae
+embody 70 years of reconstructed Northeast Atlantic catch.
 
-A drift of jellyfish, each one a fish stock of the Northeast Atlantic. On load it plays itself —
-a slow, continuous sweep from 1950 to 2018 — and you watch the tank fill green then go dark as the
-fisheries collapse, the surface light failing and the dead stocks sinking into the deep. Grab the
-scrubber any time to drive the years yourself.
+Each jellyfish represents a named taxon aggregated across the region. On load the piece plays a
+slow sweep from 1950 to 2018; bodies change as reconstructed catch rises or falls relative to each
+taxon's own observed peak. Grab the scrubber at any time to drive the years yourself.
 
-Every jellyfish is one species. Its body is the data:
+This is an expressive rendering of **catch history**, not a direct measure of fish abundance,
+biomass, or stock health. It does not measure jellyfish abundance or claim that a bloom occurred in
+the Northeast Atlantic during this period. Catch can also change because of quotas, fishing effort,
+markets, reporting, management, and other factors.
+
+Every jellyfish is one named taxon. Its body is the data:
 
 | part | field |
 |---|---|
-| **bell size** | the stock's total catch — its mass |
-| **hue** | its fate vs its own historical peak (thriving green · declining gold · collapsed coral · husk slate) |
-| **pulse** | thriving breathes slow · declining flutters · a husk is nearly still |
-| **7 tentacles** | the seven decades 1950s→2010s; a tentacle is a *stump* from the decade the stock collapsed |
+| **bell size** | lifetime reconstructed catch on a logarithmic scale |
+| **hue** | catch relative to the taxon's own observed peak (near peak green · below peak gold · far below peak coral · minimal catch slate) |
+| **pulse** | near-peak catch breathes slowly; lower catch fades and stills |
+| **7 tentacles** | seven decade buckets from the 1950s→2010s; a tentacle becomes a *stump* once post-peak catch falls below one-third of peak |
 | **oral arms** | length is the share of catch on the official books (vs unreported) |
-| **stings** | dead bycatch discarded at sea |
+| **stings** | the share of catch discarded at sea |
 | **two-tone** | industrial vs small-scale fleet |
 
-The story the bloom tells: of the 28 largest NE Atlantic stocks, most are a fraction of their
-peak by the 2010s — capelin down 89%, herring 71%, blue whiting 66%, cod 56%. Only Atlantic
-mackerel and Norway lobster are near their historical high. A tank that glowed green in 1970
-is a field of amber and coral husks by 2018.
+The piece selects the 28 named taxa with the largest lifetime reconstructed catch in the dataset.
+Its colors and motion compare each taxon only with its own catch history; categories are descriptive
+visual thresholds, not biological stock assessments.
 
 ## The data
 
@@ -35,7 +37,7 @@ unreported) for the NEAFC region, 1950–2018, from the University of British Co
 Around Us project.
 
 `scripts/extract.ts` streams the public catch CSV over plain HTTPS — **no AWS account, no
-credentials** — aggregates each species into a per-decade curve, and writes a small JSON to
+credentials** — aggregates each named taxon into a per-decade curve, and writes a small JSON to
 `public/data/bloom.json` (committed to this repo). The cloud is the data *source*, never a
 runtime dependency: the site is pure client-side three.js.
 

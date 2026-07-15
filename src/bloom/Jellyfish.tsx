@@ -31,7 +31,25 @@ import {
   makeRibbonGeometry,
 } from './bloomGeometry'
 import { dotTexture, haloTexture } from './dotTexture'
-import { useBloomControls } from './bloomControls'
+import { useBloomControls, beatEnvelope } from './bloomControls'
+
+// FIXED pulse phase rate. The PHASE must ramp linearly with the clock — phase = t·RATE means angular
+// velocity is exactly RATE. Multiplying the clock by a time-VARYING rate (as an earlier version did:
+// t·pRate where pRate tracked live vitality) injects a spurious t·(dRate/dt) term that grows with
+// elapsed wall-clock time — the pulse reverses mid-scrub and pops unboundedly the longer the page is
+// open. So vitality drives pulse AMPLITUDE (pDepth) only, never the phase rate. (Verified defect.)
+const PULSE_BASE_RATE = 1.2
+
+// ── #2 UNIFORMITY = DEATH — the clinical over-saturated cyan the whole field drains toward as the bloom
+// fills the frame. A jellyfish bloom is a MONOCULTURE: the varied ecosystem (many hues, independent
+// breathing) collapses into one over-abundant species pulsing as a single organism. The fate hue is
+// VESTIGIAL under the inverted premise (presence already signals collapse), so it's repurposed as a live
+// "death" channel. Allocated ONCE at module scope. CYAN_MAX_PULL < 1 leaves a whisper of the original hue
+// at full bloom so the field reads as drained, not a flat cyan fill. Keyed to the SHARED decadeProgress
+// (never per-creature) so the whole field converges together. Pure f(clock, decadeProgress, seed) —
+// reversible: hues re-vary and phases re-diverge on a backward scrub, no latch.
+const CLINICAL_CYAN = new THREE.Color('#7FE8FF')
+const CYAN_MAX_PULL = 0.9
 
 // Pulse rate / depth by vitality — the bell's "mood", and (same field) the neural firing rate, so
 // the mind can never disagree with the breath.
@@ -162,23 +180,57 @@ export function Jellyfish({ spec, stock, position, selected, dimmed, focal, onSe
     // the only per-frame cost is a little arithmetic; the eased uniforms below smooth it to 60fps.
     const v = visualsAsOf(stock, ctl.decadeF)
     targetColor.set(v.tankColor)
+    // ── #2 UNIFORMITY = DEATH (hue) — drain every medusa toward ONE clinical cyan as the bloom fills the
+    // frame, so the varied 1950 ecosystem becomes a 2018 monoculture. targetColor is the single source
+    // every channel (bell/neural/halo/tentacles) eases toward, so this one lerp drains the whole creature.
+    // pow(dp,1.5) → the colour goes slightly BEFORE the pulse locks (#2 step below): hue first, then unison.
+    targetColor.lerp(CLINICAL_CYAN, CYAN_MAX_PULL * Math.pow(ctl.decadeProgress, 1.5))
     targetColorB.copy(targetColor).multiplyScalar(1.5)
 
-    // ── DEATH-THROE — the one MOMENT the continuous fade was missing. As survival (glow) falls through
-    // 0.1 (the collapsed→husk boundary — "all but gone"), the creature gives a last surge: the mind
-    // flares, the bell flushes a final coral, before the light releases and goes out. A Gaussian bump in
-    // glow-space centred on 0.1 (≈1 at the boundary, ~0 by glow 0 and 0.2). Because it's a pure function
-    // of glow (⟸ decadeF) it swells-and-releases on a forward scrub and RE-swells on a backward scrub —
-    // never a fired-once latch. The throes self-stagger because every stock crosses 0.1 at a different
-    // year, and the flare lives on the small dendrite brain (not the giant halo), so 8 near-simultaneous
-    // collapses read as scattered embers, not a fireworks show.
-    const throe = Math.exp(-Math.pow((v.glow - 0.1) / 0.045, 2))
-    // pulse rate/depth/neural interpolated CONTINUOUSLY from survival (glow) — a stock's breath slows
-    // smoothly as it dies rather than snapping at fate thresholds. Healthy ≈ slow-deep hero breath;
-    // husk ≈ near-still. (Replaces the discrete PULSE[vitality] lookup for the animated targets.)
-    const pRate = 0.4 + 1.9 * v.glow // ~0.4 (still) → ~2.3 (lively)
-    const pDepth = 0.02 + 0.2 * v.glow // shallow held breath → deep muscular jet
-    const pNeural = 0.1 + 1.0 * v.glow
+    // ── BLOOM PRESENCE — the inversion at the heart of the piece. A jellyfish is the SIGN of a
+    // collapsed fishery: overfish a sea, the fish vanish, and jellyfish move into the empty water. So a
+    // medusa here is ABSENT while its stock is healthy and BLOOMS into being — grows, brightens, swims —
+    // as the stock collapses. `collapse` = how far the stock has fallen from its peak (0 healthy → 1
+    // gone); `bloom` is its presence, with a faint floor so a healthy sea still holds a few drifting
+    // jellyfish that then multiply and take over. The 2 survivors (mackerel, Norway lobster) never
+    // collapse, so their slots stay near-empty — the ABSENCE of a jellyfish is the healthy outcome, and
+    // the aggregate bloom fills the frame as the sum of every stock that fell. Pure f(glow ⟸ decadeF),
+    // so it grows on a forward scrub and recedes on a backward one — no latch.
+    const collapse = 1 - v.glow // 0 healthy → 1 collapsed
+    const bloom = 0.05 + 0.95 * Math.pow(collapse, 0.9) // presence: faint floor → full vibrant medusa
+
+    // #4 THE BEAT — during the scripted tipping point the medusae themselves dim (so the whole tank, not
+    // just the world, goes dark in 'black') then flare on the ignite. `doom` 0..1 dims bell/glow/halo;
+    // `flare` 0..1 lifts them as the light returns. Read via the shared envelope so every layer agrees.
+    const beat = ctl.beatActive ? beatEnvelope(ctl.beatPhase, ctl.beatT) : { dark: 0, ignite: 0 }
+    const doom = beat.dark
+    const flare = beat.ignite
+    // a bloomed jelly is VIBRANT and swimming; a barely-present one is faint and near-still. This drives
+    // vitality/brightness (was the fish stock's own survival) — now it's the jellyfish's own thriving.
+    const bloomAlive = 0.14 + 0.86 * bloom
+
+    // pulse DEPTH + neural rate scale with the jellyfish's bloom (a full bloom breathes deep and fires
+    // lively, a faint seed jelly is nearly still). The phase RATE is the fixed PULSE_BASE_RATE — vitality
+    // never drives the phase (see the const: t·varying-rate injects a wall-clock-growing frequency error).
+    const pDepth = 0.02 + 0.2 * bloom // shallow → deep muscular jet
+    const pNeural = 0.1 + 1.0 * bloom
+
+    // ── #2 UNIFORMITY = DEATH (pulse) — as the bloom fills the frame each medusa's independent pulse
+    // offset collapses toward a single global clock, so the whole field contracts in eerie unison (the
+    // monoculture breathing as one organism). pow(dp,2) keeps 1950 a living ecosystem of independent
+    // phases and lets the lock bite only late. phaseOffset = mix(seed·2π, 0, unison): at full bloom every
+    // creature's offset is 0 → identical phase. Pure f(clock, decadeProgress, seed), reversible.
+    const unison = Math.pow(ctl.decadeProgress, 2)
+    const phaseOffset = seed * 6.2831853 * (1 - unison)
+
+    // ── #5 SHARED CAUSTIC DAPPLE — ripples of surface light graze the whole drift together, like
+    // sun-dapple through moving water. Keyed to the creature's FIXED slot (position) × clock, so it
+    // travels as a slow diagonal ripple across the field rather than every bell flickering in unison.
+    // Scaled by v.glow (a dead husk isn't lit) and faded with the failing surface light
+    // (decadeProgress → the dapple thins as the sea darkens). Folded into uGlowBoost (bell) at full and
+    // the halo target at HALF (the additive halo already breathes ±15%, so full dapple there would throb).
+    const caustic = 0.5 + 0.5 * Math.sin(t * 0.23 + position[0] * 0.35) * Math.sin(t * 0.15 - position[2] * 0.28 + 1.3)
+    const dapple = 1 + 0.11 * (caustic * 2 - 1) * bloom * (1 - 0.5 * ctl.decadeProgress)
 
     // camera distance for this creature, computed ONCE per frame and reused by the halo-fog and the
     // draw-order rank (was two independent subtract+sqrt for the same value).
@@ -186,21 +238,24 @@ export function Jellyfish({ spec, stock, position, selected, dimmed, focal, onSe
     if (bellMat.current) {
       const u = bellMat.current.uniforms
       u.uTime.value = t
-      u.uGlowBoost.value = ctl.glowBoost
+      u.uGlowBoost.value = ctl.glowBoost * dapple // sun-dapple grazes the gel
       u.uFogDensity.value = ctl.fogDensity
-      // dying stocks also dim their bell (sink darkens): a husk sinking into the deep loses its light.
-      const target = (dimmed ? 0.55 : 1) * (1 - 0.35 * v.sink)
-      u.uOpacity.value += (target - u.uOpacity.value) * Math.min(1, dt * 4)
-      // ease fate-driven uniforms toward the current decade's state (color / glow / pulse / aliveness)
+      // BLOOM IN / FADE OUT — a medusa's opacity IS its bloom presence: near-invisible where its stock
+      // is healthy (barely there in the empty 1950 water), fading up to a solid gel bell as the stock
+      // collapses and the jellyfish takes over. So the frame fills with substance as the fishery empties.
+      const target = (dimmed ? 0.55 : 1) * (0.06 + 0.94 * bloom) * (1 - 0.85 * doom)
+      // during the beat the opacity must snap with it, not lag on the slow dt*4 low-pass
+      u.uOpacity.value += (target - u.uOpacity.value) * (ctl.beatActive ? 0.3 : Math.min(1, dt * 4))
+      // ease uniforms toward the current bloom state (colour / glow / pulse / aliveness)
       ;(u.uColor.value as THREE.Color).lerp(targetColor, k)
       ;(u.uColorB.value as THREE.Color).lerp(targetColorB, k)
-      // a final coral flush at the husk-crossing (throe rides the eased glow target so it swells then
-      // releases). Magnitude kept modest so the bell brightens relative to its own dim floor — an ember,
-      // not a hero flare — and stays under the Bloom threshold with the rest of the drift.
-      u.uGlow.value += (v.glow + throe * 0.5 - u.uGlow.value) * k
-      u.uAlive.value += (v.alive - u.uAlive.value) * k
+      // interior lantern brightens as the jellyfish blooms — its own vitality, not a fish stock's. The
+      // beat dims it toward dark (doom) then flares it brighter-than-normal as the light returns (flare).
+      const glowTarget = bloom * (1 - 0.9 * doom) + 0.6 * flare
+      u.uGlow.value += (glowTarget - u.uGlow.value) * (ctl.beatActive ? 0.3 : k)
+      u.uAlive.value += (bloomAlive - u.uAlive.value) * k
       u.uSplit.value += (spec.engWeight - u.uSplit.value) * k
-      u.uPulseRate.value += (pRate - u.uPulseRate.value) * k
+      u.uPulseRate.value += (PULSE_BASE_RATE - u.uPulseRate.value) * k // fixed phase rate (see const)
       u.uPulseDepth.value += (pDepth - u.uPulseDepth.value) * k
     }
     if (neuralMat.current) {
@@ -209,10 +264,16 @@ export function Jellyfish({ spec, stock, position, selected, dimmed, focal, onSe
       u.uFogDensity.value = ctl.fogDensity
       u.uSpeed.value += (pNeural - u.uSpeed.value) * k
       ;(u.uColor.value as THREE.Color).lerp(targetColor, k)
-      // dimmed creatures fire fainter; a sinking husk's mind goes nearly dark (0.8, so the dendrites
-      // fall toward ~0.03 while the bell membrane keeps its 0.12 alive floor — a ghost shell). At the
-      // husk-crossing the mind gives one last SURGE (+throe) before it releases: a body's final signal.
-      u.uIntensity.value = v.alive * (dimmed ? 0.4 : 1) * (1 - 0.8 * v.sink) + throe * 0.6
+      // the mind brightens as the jellyfish blooms into being — faint seed → lively full medusa. The
+      // dendrite fan is HDR (the brightest element, bloom-amplified), so it MUST answer the beat too —
+      // else the minds stay lit while the bells/halos go dark in 'black' (glowing brains in a black tank).
+      // doom dims it toward dark; flare*bloom re-fires it on ignite (bloom-gated so faint survivors stay dark).
+      // NEURAL doom is DEEPER than bell/halo (0.97 vs 0.9): the dendrite fan is HDR-spiked ×3.4 in-shader,
+      // so at the bell's 0.1-floor the minds still bloom visibly — twinkling in a tank meant to hold its
+      // breath. 0.97 near-extinguishes them so the minds go fully dark in 'black' (the emotional point).
+      // gate the mind by bloom (× bloom) so a barely-present 1950 jelly has a DARK brain, not a lit one
+      // floating over an invisible bell — the dendrite fan was the brightest thing left at the start.
+      u.uIntensity.value = bloomAlive * bloom * (dimmed ? 0.4 : 1) * (1 - 0.97 * doom) + 0.35 * flare * bloom
     }
     if (glassRef.current) {
       // HERO GLASS SHELL — MeshTransmissionMaterial runs its own vertex shader, so it CAN'T carry the
@@ -220,38 +281,63 @@ export function Jellyfish({ spec, stock, position, selected, dimmed, focal, onSe
       // exactly why the focused hero read as static/glassy. Reproduce the bell's dominant pulse
       // envelope (bloomShaders.bellVertex, sampled at the apex h≈1) as a non-uniform scale so the
       // refraction core squashes/bulges in lockstep with the gel around it. Base 0.94 = shell inset.
-      const phase = t * pRate + seed * 6.2831853
+      const phase = t * PULSE_BASE_RATE + phaseOffset // fixed rate; offset converges with the field (#2)
       const s = Math.sin(phase)
       const p = (s > 0 ? Math.pow(s, 0.6) : -Math.pow(-s, 1.4)) * pDepth
       glassRef.current.scale.set(0.94 * (1 - p * 0.55), 0.94 * (1 + p), 0.94 * (1 - p * 0.55))
     }
     if (haloMat.current && group.current) {
-      // the aura breathes in time with the bell's own pulse, and dims (doesn't vanish) when another
-      // medusa is selected so the whole tank keeps a soft ambient glow
-      const breath = 0.85 + 0.15 * Math.sin(t * pRate + seed * 6.28)
+      // ── #6 AURA BREATH-LAG — the glow swells just AFTER the bell contracts (a 0.8-rad lag) and drifts
+      // on a slow second, incommensurate period, so the light feels emitted-and-diffusing rather than
+      // painted in lockstep with the muscle. Same ±0.15 envelope as before, split across the two periods.
+      // #2: the primary breath term converges (phaseOffset) so late-bloom auras swell together; the second
+      // incommensurate term (seed·17) stays untouched so the field never reads as a perfectly dead metronome.
+      const breath =
+        0.85 + 0.1 * Math.sin(t * PULSE_BASE_RATE * 0.9 + phaseOffset - 0.8) + 0.05 * Math.sin(t * 0.13 + seed * 17.0)
       // atmospheric fog: the halo also attenuates into the haze with distance (same fogExp2 as the
       // scene + shaders) so far medusae don't glow sharp over the backdrop
       const fd = ctl.fogDensity * camDist
       const fog = 1 - Math.exp(-fd * fd)
-      // live halo strength from CONTINUOUS aliveness/glow (was memoized haloBase); a sinking husk's
-      // aura fades out with it.
-      const liveHaloBase = 0.22 + 0.5 * v.alive + 0.35 * v.glow
-      const target = liveHaloBase * ctl.haloBoost * breath * (dimmed ? 0.4 : 1) * (1 - 0.7 * fog) * (1 - 0.5 * v.sink)
+      // halo strength scales with the jellyfish's bloom — a barely-present seed jelly has almost no aura,
+      // a full bloom glows strong. The caustic dapple grazes it at HALF amplitude (it already breathes
+      // above) so the shared sun-ripple lights the auras too without throbbing.
+      // halo scales from ~0 (absent jelly = no aura) to full at bloom — the old 0.14 floor gave every
+      // barely-present 1950 jelly a visible glow, part of the "too many at the start" read.
+      const liveHaloBase = 0.02 + 0.84 * bloom
+      const haloDapple = 1 + (dapple - 1) * 0.5
+      const target =
+        liveHaloBase * ctl.haloBoost * breath * haloDapple * (dimmed ? 0.4 : 1) * (1 - 0.7 * fog) * (1 - 0.9 * doom) + 0.25 * flare
       const cur = haloMat.current.opacity
-      haloMat.current.opacity = cur + (target - cur) * Math.min(1, dt * 4)
+      haloMat.current.opacity = cur + (target - cur) * (ctl.beatActive ? 0.3 : Math.min(1, dt * 4))
       haloMat.current.color.lerp(targetColor, k) // aura follows the current fate hue
       // P8: a fully-faded halo (fogged/dimmed husk) still rasterizes its giant additive quad — skip
       // the draw entirely below an epsilon (toggle the SPRITE object, not the material), restore above
       // it. Lossless (it contributes ~nothing there).
       if (haloSprite.current) haloSprite.current.visible = haloMat.current.opacity >= 0.012
     }
-    // tentacles/arms recolor with the fate too (their uColor is memoized per-appendage otherwise), and
-    // lose MUSCLE TONE as the stock dies: a dying medusa stops actively swimming, so its trails slow and
-    // shorten to a limp drag rather than a live swing. Scale amp/freq by glow off each material's own
-    // base (captured once) — keep SOME amp (→0 reads rigid, not slack). A severed stub has base amp 0,
-    // so the multiply leaves it 0 (never re-animates a snapped tentacle).
-    const slackAmp = 0.5 + 0.5 * v.glow
-    const slackFreq = 0.35 + 0.65 * v.glow
+    // ── THE STROKE — hoisted above the tentacle loop so every layer (bell bob, body nod, tentacle
+    // recoil) phase-locks to ONE propulsive stroke. `pulsePhase` is the shared jet clock; `stillness`
+    // (1 alive → 0.15 husk) gates every living motion so a dying stock calms across all channels at
+    // once. This coupling is what makes the animal read as swimming BECAUSE of its own pulse, rather
+    // than a bell breathing while independent tentacles wave on a separate clock.
+    // fixed phase rate (see PULSE_BASE_RATE) — vitality drives pulse AMPLITUDE (pDepth), never the phase.
+    // #2: + phaseOffset (not raw seed·2π) so as the bloom fills, every creature's stroke converges to one
+    // global clock and the whole field jets in unison — the single shared jet clock every layer locks to.
+    const pulsePhase = t * PULSE_BASE_RATE + phaseOffset
+    // LIVELINESS — living motion (bob, nod, tentacle recoil) scales with the jellyfish's BLOOM: a faint,
+    // barely-present seed jelly drifts nearly still; a full bloom swims with muscle. So the sea comes
+    // alive with motion exactly as it fills with jellyfish. (Was glow-gated for the old die-as-fish-die
+    // reading; now bloom-gated for the fish-collapse-→-jellyfish-bloom reading.)
+    // liveliness follows bloom but with a gentler curve (pow 1.1→0.8) so anything VISIBLE always drifts —
+    // a present jelly should never read as a frozen prop. Absent jellies (bloom≈0.05) are now faded out by
+    // the opacity/halo/neural gates above, so their stillness is invisible rather than a field of frozen skeletons.
+    const liveliness = Math.pow(bloom, 0.8)
+
+    // tentacles gain MUSCLE TONE as the jellyfish blooms: a seed jelly's trails barely stir, a full
+    // bloom's swing with a live sway. Scale amp/freq by bloom off each material's own base (captured
+    // once). A severed stub has base amp 0, so the multiply leaves it 0.
+    const slackAmp = 0.25 + 0.75 * bloom
+    const slackFreq = 0.4 + 0.6 * bloom
     for (const m of swayMats.current)
       if (m) {
         m.uniforms.uTime.value = t
@@ -263,6 +349,20 @@ export function Jellyfish({ spec, stock, position, selected, dimmed, focal, onSe
         }
         m.uniforms.uAmp.value = m.userData.baseAmp * slackAmp
         m.uniforms.uFreq.value = m.userData.baseFreq * slackFreq
+        // FADE THE TRAIL WITH THE BLOOM — the tentacles/arms must be near-invisible where the jelly is
+        // barely present (else the 1950 sea reads as a field of skeletal trails + glowing minds while the
+        // bells are gone — the "why so many jellyfish at the start" bug). Same 0.06→full curve as the bell
+        // opacity, dimmed further by the beat's doom so they go dark in the tipping-point black too.
+        m.uniforms.uOpacity.value = (0.04 + 0.96 * bloom) * (1 - 0.85 * doom)
+        // ── #2 JET-RECOIL SURGE — the whole bundle whips taut on the contraction kick and streams back
+        // out on the glide (overlapping action across the bell→tentacle boundary — the medusa's defining
+        // secondary motion). Drives the shader's uSurge* uniforms off the SAME pulsePhase as the bell, so
+        // the trail recoils exactly when the bell jets. `liveliness` scales it with the bloom; the
+        // shader's own step(uAmp) guard keeps a severed stub from re-animating.
+        if ('uSurgePhase' in m.uniforms) {
+          m.uniforms.uSurgePhase.value = pulsePhase
+          m.uniforms.uSurgeDepth.value = pDepth * liveliness
+        }
       }
     if (group.current) {
       // shared water current — a slow common drift phased by world position, so the whole tank moves
@@ -271,56 +371,43 @@ export function Jellyfish({ spec, stock, position, selected, dimmed, focal, onSe
       const curX = Math.sin(t * 0.18 + position[0] * 0.25) * 0.18 + Math.sin(t * 0.11 + position[2] * 0.3) * 0.1
       const curY = Math.cos(t * 0.15 + position[0] * 0.2) * 0.12
 
-      // ── STILLNESS AT DEATH — death is the absence of motion. As a stock sinks toward husk, damp its
-      // OWN living motion (breath-bob + buoyant rise) toward a near-frozen rest; leave the shared water
-      // current (curX/curY) untouched so the corpse still drifts in the medium rather than freezing out
-      // of it. 1 while alive → 0.15 at full husk.
-      const stillness = 1 - 0.85 * v.sink
+      // (stillness + pulsePhase are hoisted above the tentacle loop so every layer shares one stroke.)
 
-      // ── ORGANIC VERTICAL DRIFT — a real medusa breathes with a gentle vertical lilt, it does not
-      // pogo. Small slow bob synced to the (gentle) pulse; the tentacle sway + shared current are the
-      // dominant motion. Amplitude is small (world units) and tethered to the data slot. Damped by
-      // stillness so a dying bell stops breathing.
-      const pulsePhase = t * pRate + seed * 6.2831853
-      const bob = Math.sin(pulsePhase) * pDepth * 0.6 * stillness // a soft breath-bob
+      // ── JET-AND-GLIDE BOB — the medusa KICKS then COASTS, it doesn't hover on a symmetric sine. A
+      // fundamental + a small 2nd harmonic skews the waveform to a fast contraction (~37% of cycle) and
+      // a slow drag-glide (~63%) — a real jet-propulsion silhouette. The harmonic coeff stays ≤0.30 so
+      // vertical velocity keeps just two zero-crossings. `* liveliness` so a faint seed jelly barely stirs.
+      const bob = pDepth * 0.55 * (Math.sin(pulsePhase) + 0.3 * Math.sin(2 * pulsePhase + 0.5)) * liveliness
 
-      // ── BUOYANT ASCENT — the bloom RISES with purpose instead of bobbing aimlessly in place. The old
-      // `lilt` was zero-mean AND phased by each creature's own seed, so 28 independent lifts averaged to
-      // nothing — a static diorama. The fix is COHERENCE: one IDENTICAL vertical phase across the whole
-      // field (no seed, no position term) so the bloom heaves up the water column as a single mass. The
-      // slowest motion in the tank (~63s period, below curX's ~35s) so it reads as deliberate ascent.
-      // Lift scales with survival: a healthy sea hovers UP toward the surface light; a dying one loses
-      // lift and the sink takes over. A tiny per-creature detune (an order below the shared term) keeps
-      // the unison organic, not a rigid elevator. Bounded pure f(clock, glow) — slot-anchored, no
-      // accumulator, reversible on forward/backward scrub.
+      // ── BUOYANT ASCENT — the bloom drifts up the water column as ONE coherent mass. One IDENTICAL
+      // vertical phase across the whole field (no seed, no position term) so it heaves together, not as
+      // 28 independent bobs. Lift scales with the jellyfish's bloom, so as the sea fills with medusae the
+      // whole rising mass builds. A tiny per-creature detune keeps the unison organic. Bounded pure
+      // f(clock, bloom) — slot-anchored, no accumulator, reversible on forward/backward scrub.
       const riseCommon = 0.5 + 0.5 * Math.sin(t * 0.10) // 0..1, SHARED phase — the field lifts as one
       const detune = Math.sin(t * 0.13 + seed * 6.28) * 0.06 // ±0.06 organic jitter, well below the unison
-      const lift = v.glow * (0.15 + 0.55 * riseCommon + detune) * stillness // 0 dead → hovers 0.15–0.70 alive
-
-      // ── DEATH SINK — a collapsing stock loses buoyancy and slowly settles DOWN into the dark deep,
-      // visibly losing life (bell/halo/mind dimming handled above). Healthy = 0; a husk sinks ~3.4
-      // units below its slot into the fog. Composes with `lift` so the vertical axis itself tells the
-      // story: alive = drawn up toward the light, collapse = released down into the dark.
-      const SINK_DEPTH = 3.4
-      const sinkY = -v.sink * SINK_DEPTH
+      const lift = bloom * (0.15 + 0.55 * riseCommon + detune) // 0 when absent → hovers 0.15–0.70 when bloomed
 
       group.current.position.x = position[0] + curX
-      group.current.position.y = position[1] + curY + bob + lift + sinkY
+      group.current.position.y = position[1] + curY + bob + lift
       group.current.position.z = position[2] + Math.sin(t * 0.13 + position[0] * 0.35) * 0.12
 
       // ── ORIENTATION — vary the bell's tilt like a real drifting bloom instead of a field of upright
       // umbrellas: a deterministic resting pitch/roll per creature + a slow wander, and a lean into the
-      // current. A dying stock also tips further over as it sinks (loses its righting control). Kept
-      // gentle so the anatomy still reads. rotation.y keeps a slow turn so tentacles trail.
-      // sinking stocks list further as they die — righting control fails. Capped so the dome still faces
-      // up-ish (past ~horizontal the silhouette read breaks); 0.8 tips it well over without capsizing.
-      const sag = Math.min(v.sink * 0.8, 0.85)
-      group.current.rotation.x = tilt.pitch + Math.sin(t * tilt.wSpeed + seed * 6.28) * 0.12 + sag
+      // current. Kept gentle so the anatomy still reads. rotation.y keeps a slow turn so tentacles trail.
+      // ── #3 STROKE COUNTER-NOD — the body rocks a hair with each jet (Newton's third law on the
+      // water it pushes), lagged ~0.9rad behind the contraction so it reads as a REACTION to its own
+      // thrust, not a synchronized tilt. `* liveliness` so a faint seed jelly doesn't nod. Phase-locked
+      // to the same pulsePhase as the bob → the whole animal swims off one stroke.
+      const nod = Math.sin(pulsePhase - 0.9) * pDepth * 0.22 * liveliness
+      group.current.rotation.x = tilt.pitch + Math.sin(t * tilt.wSpeed + seed * 6.28) * 0.12 + nod
       group.current.rotation.z = tilt.roll + curX * 0.15 + Math.cos(t * tilt.wSpeed * 0.8 + seed * 3.1) * 0.1
       group.current.rotation.y = Math.sin(t * 0.15 + seed * 6.28) * 0.22
-      // whole-creature scale = this-decade survival (the tank thins as stocks collapse) × a small
-      // selection pop. Eased smoothly so scrubbing a stock into collapse SHRINKS it before your eyes.
-      const s = v.decadeScale * (selected ? 1.12 : 1)
+      // ── BLOOM SCALE — a jellyfish grows from a faint seed into a full medusa as its stock collapses,
+      // so the tank fills with mass exactly as the fishery empties. Floored at 0.35 so an absent jelly is
+      // a small drifting presence, not gone (the datum stays countable). Eased smoothly so scrubbing a
+      // stock into collapse GROWS its jellyfish before your eyes.
+      const s = (0.35 + 0.65 * bloom) * (selected ? 1.12 : 1)
       const cs = group.current.scale.x
       group.current.scale.setScalar(cs + (s - cs) * Math.min(1, dt * 3))
 
@@ -611,6 +698,8 @@ function Appendage({
       uOpacity: { value: 1 },
       uAdvisory: { value: advisory ? 1 : 0 },
       uFogDensity: { value: 0.058 },
+      uSurgePhase: { value: 0 }, // driven per-frame from the creature's bell pulse (jet-recoil surge)
+      uSurgeDepth: { value: 0 }, // = pDepth·stillness
     }),
     [seed, severed, kind, r, color, advisory],
   )

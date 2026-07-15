@@ -40,6 +40,21 @@ export interface BloomControlsState {
   //                   LIGHT itself goes out as the fishery dies — "light as a clock".
   decadeF: number
   decadeProgress: number
+  // AGGREGATE BLOOM LEVEL — the honest mean collapse across the 28 stocks at the live decadeF (mean of
+  // 1 - visualsAsOf(stock, decadeF).glow, the exact per-creature `collapse` averaged). 0 in 1950,
+  // ~0.62 in 2018 (the 2 survivors never fully fall). Written ONCE per frame by BloomRenderer's decade
+  // effect, never per-creature. Read by story techniques via getState() in useFrame — NEVER a
+  // subscription (a useBloomControls(s => s.bloomLevel) re-renders the whole scene every frame).
+  bloomLevel: number
+  // SCRIPTED TIPPING-POINT BEAT (technique #4) — the ONE documented exception to the scene's otherwise
+  // pure f(clock, decadeF) reversibility. Driven from App.tsx's rAF loop (which owns the playhead): as
+  // autoplay crosses BEAT_INFLECTION_DECADEF going FORWARD, an ~8s beat plays (fade→black→ignite→settle)
+  // and RAMPS decadeF 2.6→6.0 through ignite+settle so the beat IS the climax that lands the 2018
+  // end-state. beatActive gates the visual overrides; beatPhase names the sub-beat; beatT is 0..1 across
+  // the whole beat. One-shot per forward crossing; re-arms on rewind/reset. Read via getState() only.
+  beatActive: boolean
+  beatT: number
+  beatPhase: 'idle' | 'fade' | 'black' | 'ignite' | 'settle'
   // camera framing (NOT part of the visual defaults / reset — set live via the Framing panel):
   freeze: boolean // pause the auto-orbit so you can hand-compose a shot to capture
   camStart: CamPose | null // authored opening pose; null = derived arc-in default
@@ -77,12 +92,74 @@ export const BLOOM_DEFAULTS = {
 // poses without a React re-render. Plain mutable object on purpose (per-frame writes, no subscribers).
 export const liveCamPose: CamPose = { az: 0, pol: 0, rad: 11 }
 
+// ── SHARED STORY-CLOCK CONSTANTS (imported by the storytelling techniques) ──────────────────────────
+// The aggregate bloomLevel never reaches 1 (mackerel + Norway lobster never fully collapse); divide by
+// this observed 2018 endpoint for a clean 0..1 drive: min(1, bloomLevel / BLOOM_LEVEL_FULL).
+export const BLOOM_LEVEL_FULL = 0.62
+// The tipping-point beat (technique #4) fires as autoplay crosses this decadeF going FORWARD — ~1980,
+// the sharpest single-decade aggregate collapse (running-mean glow 0.922→0.719, the largest 7-decade drop).
+export const BEAT_INFLECTION_DECADEF = 2.6
+export const BEAT_ARM_BELOW = 2.0 // re-arms once decadeF rewinds below this (hysteresis vs re-firing)
+// Beat sub-phase durations (seconds): fade→black→ignite→settle. decadeF ramps 2.6→6.0 across ignite+settle.
+export const BEAT_FADE_S = 1.4
+export const BEAT_BLACK_S = 1.1
+export const BEAT_IGNITE_S = 2.8
+export const BEAT_SETTLE_S = 2.7 // total ≈ 8.0s
+export const BEAT_TOTAL_S = BEAT_FADE_S + BEAT_BLACK_S + BEAT_IGNITE_S + BEAT_SETTLE_S
+
+// WORLD-DARKENING SHAPE — the single curve #1 (and the beat's steady-state hand-back) key off, so the
+// god-rays, exposure, fills, and backdrop all fade together. Slightly late-biased (pow 1.15) so the
+// 1950s-70s stay lit and the dark bites post-1990 as the sea empties. worldDarkness(0)===0 (the
+// 1950-frame guarantee), worldDarkness(1)===1.
+export const worldDarkness = (p: number): number => {
+  const c = p < 0 ? 0 : p > 1 ? 1 : p
+  return Math.pow(c, 1.15)
+}
+
+// #4 THE BEAT'S VISUAL ENVELOPE — maps the store's beat state to two scalars the renderer + Jellyfish
+// read so the lights-out-then-ignite reads as ONE scripted event on top of the steady-state look:
+//   dark   0..1 — extra darkness laid over worldDarkness: ramps up through 'fade', holds ~full in
+//                 'black' (the sea's breath held), snaps back off through 'ignite', 0 in 'settle'/'idle'.
+//   ignite 0..1 — a brief brightness/bloom LIFT right as the light returns (the black→ignite hinge),
+//                 decaying across 'ignite' so the return reads as an ignition, not a fade-up.
+export interface BeatEnvelope { dark: number; ignite: number }
+export const beatEnvelope = (phase: BloomControlsState['beatPhase'], t: number): BeatEnvelope => {
+  // t is 0..1 across the WHOLE beat; recover per-phase progress from the duration constants.
+  const total = BEAT_TOTAL_S
+  const s = t * total // elapsed seconds
+  const tFade = BEAT_FADE_S
+  const tBlack = BEAT_FADE_S + BEAT_BLACK_S
+  const tIgnite = tBlack + BEAT_IGNITE_S
+  switch (phase) {
+    case 'fade': {
+      const k = tFade > 0 ? s / tFade : 1 // 0→1 darkening
+      return { dark: k * k, ignite: 0 } // ease-in to black
+    }
+    case 'black':
+      return { dark: 1, ignite: 0 } // held dark
+    case 'ignite': {
+      const k = Math.min(1, (s - tBlack) / Math.max(0.0001, BEAT_IGNITE_S)) // 0→1 across ignite
+      return { dark: 1 - k, ignite: (1 - k) * (1 - k) } // dark releases; a decaying flash of light
+    }
+    case 'settle': {
+      const k = Math.min(1, (s - tIgnite) / Math.max(0.0001, BEAT_SETTLE_S))
+      return { dark: 0, ignite: 0.15 * (1 - k) } // a last ember of the flash easing out
+    }
+    default:
+      return { dark: 0, ignite: 0 }
+  }
+}
+
 // Plain store (no actions) — leva pushes whole-object updates via setState; readers subscribe to the
 // slices they need, and per-frame loops use getState() to avoid re-rendering React on every tick.
 export const useBloomControls = create<BloomControlsState>(() => ({
   ...BLOOM_DEFAULTS,
   decadeF: 0,
   decadeProgress: 0,
+  bloomLevel: 0,
+  beatActive: false,
+  beatT: 0,
+  beatPhase: 'idle',
   freeze: false,
   camStart: null,
   camEnd: null,
