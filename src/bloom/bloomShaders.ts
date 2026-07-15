@@ -3,35 +3,6 @@
 // hue carries the semantic verdict, the pulse carries vitality. HDR (>1.0) is written ONLY on the
 // glow/spike terms so the postprocessing Bloom pass amplifies meaning, not everything.
 
-// Shared noise prelude — cheap 3D gradient (Perlin-ish) noise + 3-octave fbm. Prepended to the
-// shaders that need "living tissue" motion: drifting subsurface caustics in the gel and a soft-body
-// jiggle on the bell wall, so the medusa reads as breathing flesh, not smooth colored glass.
-const NOISE = /* glsl */ `
-  vec3 hash3(vec3 p){
-    p = vec3(dot(p, vec3(127.1, 311.7, 74.7)),
-             dot(p, vec3(269.5, 183.3, 246.1)),
-             dot(p, vec3(113.5, 271.9, 124.6)));
-    return fract(sin(p) * 43758.5453123) * 2.0 - 1.0;
-  }
-  float vnoise(vec3 p){
-    vec3 i = floor(p); vec3 f = fract(p);
-    vec3 u = f * f * (3.0 - 2.0 * f);
-    return mix(mix(mix(dot(hash3(i + vec3(0,0,0)), f - vec3(0,0,0)),
-                       dot(hash3(i + vec3(1,0,0)), f - vec3(1,0,0)), u.x),
-                   mix(dot(hash3(i + vec3(0,1,0)), f - vec3(0,1,0)),
-                       dot(hash3(i + vec3(1,1,0)), f - vec3(1,1,0)), u.x), u.y),
-               mix(mix(dot(hash3(i + vec3(0,0,1)), f - vec3(0,0,1)),
-                       dot(hash3(i + vec3(1,0,1)), f - vec3(1,0,1)), u.x),
-                   mix(dot(hash3(i + vec3(0,1,1)), f - vec3(0,1,1)),
-                       dot(hash3(i + vec3(1,1,1)), f - vec3(1,1,1)), u.x), u.y), u.z);
-  }
-  float fbm(vec3 p){
-    float a = 0.5, v = 0.0;
-    for (int i = 0; i < 3; i++) { v += a * vnoise(p); p *= 2.02; a *= 0.5; }
-    return v;
-  }
-`
-
 // ── ATMOSPHERIC FOG ───────────────────────────────────────────────────────────
 // The depth cue that GLUES the medusae into the water. The custom ShaderMaterials don't use three's
 // fog chunks, so nothing recedes — every creature renders at full clarity regardless of depth, which
@@ -58,86 +29,69 @@ const FOG = /* glsl */ `
 
 export const bellVertex = /* glsl */ `
   uniform float uTime;
-  uniform float uPulseRate;    // vitality → breaths per ~6.28s
-  uniform float uPulseDepth;   // vitality → contraction amplitude
-  uniform float uSeed;         // per-creature phase (driftSeed)
-  uniform float uRadius;       // bell radius R (ratios derive off it)
-  uniform float uFrillFreq;    // lappets around the margin
-  uniform float uFrillAmp;     // frill displacement (× R)
-  uniform float uMarginFlare;  // radial skirt opening (× R)
-  uniform float uJiggle;       // soft-body wobble amount (× R) — living tissue, not rigid glass
+  uniform float uPulseRate;
+  uniform float uPulseDepth;
+  uniform float uSeed;
+  uniform float uRadius;
+  uniform float uFrillFreq;
+  uniform float uFrillAmp;
+  uniform float uMarginFlare;
+  uniform float uJiggle;
 
   varying vec3 vWorldPos;
   varying vec3 vViewDir;
-  varying float vHeight;       // 0 at margin → 1 at apex (drives fake wall-thickness)
-  varying float vFrill;        // brightens the lace edges a touch
-  varying vec3 vLocal;         // local position (for stable interior caustics in the fragment)
-  varying float vFogDepth;     // view-space distance for atmospheric fog
-  varying float vCaustic;      // subsurface-caustic value, computed PER-VERTEX (2 octaves) and
-                               // interpolated — moved off the per-fragment path (was 72 sins/frag on
-                               // 28 overdrawn DoubleSide bells). The bell is finely tessellated, so
-                               // vertex-rate 2-octave noise is visually indistinguishable from the old
-                               // 3-octave per-fragment sample but a large fill-rate saving.
-
-  ${NOISE}
+  varying float vHeight;
+  varying float vFrill;
+  varying vec3 vLocal;
+  varying float vFogDepth;
+  varying float vCaustic;
 
   void main() {
     vec3 p = position;
-    vLocal = position / uRadius;                     // normalized, pulse-independent
+    float safeRadius = max(uRadius, 0.001);
+    vLocal = position / safeRadius;
 
-    // drifting subsurface caustic, sampled here (vertex) instead of per-fragment. Two octaves at
-    // vertex density read the same as three at fragment density for this smooth, low-freq term.
-    {
-      vec3 cp = vLocal * 3.2 + vec3(uTime * 0.28, uTime * 0.16, uSeed * 12.0);
-      float a = 0.5, v = 0.0;
-      for (int i = 0; i < 2; i++) { v += a * vnoise(cp); cp *= 2.02; a *= 0.5; }
-      vCaustic = 0.5 + 0.5 * v;                       // 0..1, matches the old fragment mapping
-    }
-    float apexY = uRadius * 0.6;
-    // normalized height: 1 at the apex knob, 0 at the margin
-    float h = clamp(p.y / apexY, 0.0, 1.0);
+    float apexY = safeRadius * 0.76;
+    float h = clamp(p.y / max(apexY, 0.001), 0.0, 1.0);
+    float margin = 1.0 - smoothstep(0.0, 0.55, h);
     vHeight = h;
-    float margin = 1.0 - smoothstep(0.0, 0.55, h);   // strongest at the rim
 
-    // ── asymmetric, propagating jet pulse ──
-    // the contraction wave travels apex→margin (real jet propulsion), phased by height
+    // Strictly bounded pulse. Keeping every displacement as a small scalar multiple of the authored
+    // radius prevents a malformed noise sample or driver-specific transcendental edge case from ever
+    // projecting a triangle across the viewport.
     float phase = uTime * uPulseRate + uSeed * 6.2831853;
-    float travel = phase - (1.0 - h) * 2.5;          // uPropagate = 2.5
-    // fast contraction (~35% of cycle), slower relaxation+glide — skew the sine
-    float s = sin(travel);
-    float pulse = (s > 0.0 ? pow(s, 0.6) : -pow(-s, 1.4)) * uPulseDepth;
+    float wave = sin(phase - (1.0 - h) * 2.2);
+    float pulse = clamp(wave * uPulseDepth, -0.22, 0.22);
+    p.y *= 1.0 + pulse * 0.72;
+    p.xz *= 1.0 - pulse * 0.32;
 
-    // squash the dome and bulge outward as it contracts (volume-conserving-ish)
-    p.y += p.y * pulse;
-    p.xz *= (1.0 - pulse * 0.55);
-
-    // ── soft-body jiggle — the wall is flesh, so it ripples asymmetrically as it swims. A slow fbm
-    // over local position + time nudges each vertex along its normal; strongest low on the bell and
-    // near the margin (thin flesh), almost nil at the stiff apex knob. This kills the rigid-glass
-    // read without disturbing the semantic silhouette.
-    vec3 nrm = normalize(normal);
-    float soft = fbm(vLocal * 2.3 + vec3(0.0, uTime * 0.5, uSeed * 10.0));
-    p += nrm * soft * uJiggle * uRadius * (0.35 + 0.65 * margin);
-
-    // ── frilled, flaring margin (the missing v1 feature) ──
     float theta = atan(p.z, p.x);
-    // furl the frill inward on contraction so the lace visibly closes when it swims
-    float furl = 1.0 - max(pulse, 0.0) * 3.0;
-    // break the frill's perfect periodicity with a noise term so no two lappets march in lockstep
-    float lace = sin(theta * uFrillFreq) + 0.4 * sin(theta * uFrillFreq * 2.3 + uTime * 0.5)
-               + 0.5 * fbm(vec3(theta * 1.5, uTime * 0.35, uSeed * 6.0));
-    vFrill = margin * (0.5 + 0.5 * lace);
-    p += nrm * margin * uFrillAmp * lace * furl;
-    // open the skirt outward like a nettle
-    vec2 outward = length(p.xz) > 1e-4 ? normalize(p.xz) : vec2(0.0);
-    p.xz += outward * margin * uMarginFlare;
+    float scallop = 0.5 + 0.5 * cos(theta * 12.0 + uSeed * 6.2831853);
+    float lace = sin(theta * uFrillFreq + phase * 0.18);
+    float lobeScale = mix(1.0, 0.92 + 0.08 * scallop, margin);
+    p.xz *= lobeScale;
 
-    vec4 world = modelMatrix * vec4(p, 1.0);
+    vec2 radial = length(p.xz) > 0.0001 ? normalize(p.xz) : vec2(0.0);
+    float frill = clamp(lace, -1.0, 1.0) * margin;
+    p.xz += radial * (uMarginFlare * margin + uFrillAmp * frill);
+    // Gentle bounded tissue ripple; no procedural vertex noise.
+    p.y += sin(theta * 5.0 + phase * 0.35) * uJiggle * safeRadius * 0.12 * margin;
+    vFrill = margin * (0.5 + 0.5 * lace);
+
+    // Cheap bounded caustic carried as a varying for the fragment material.
+    vCaustic = 0.5 + 0.25 * sin(theta * 4.0 + h * 7.0 + phase * 0.22)
+                       + 0.15 * sin(theta * 9.0 - h * 4.0 - phase * 0.13);
+    vCaustic = clamp(vCaustic, 0.0, 1.0);
+
+    // Hand the final transform to Three's canonical projection path. The transformed variable is the deformed
+    // local vertex expected by <project_vertex>; using the engine chunk keeps model/view/projection
+    // state synchronized with R3F even on the first WebGL frames after a timeline remount.
+    vec3 transformed = p;
+    vec4 world = modelMatrix * vec4(transformed, 1.0);
     vWorldPos = world.xyz;
     vViewDir = normalize(cameraPosition - world.xyz);
-    vec4 mv = viewMatrix * world;
-    vFogDepth = -mv.z;
-    gl_Position = projectionMatrix * mv;
+    #include <project_vertex>
+    vFogDepth = -mvPosition.z;
   }
 `
 
@@ -185,15 +139,15 @@ export const bellFragment = /* glsl */ `
     // the trailing brain/tentacles. The fate then reads as the creature's glowing coloured CORE seen
     // through clear gel — more real, and the clear dome is exactly what lets the brighter brain read
     // through it. (Fate still legible at a 28-glance via rim + core + halo + coloured trails.)
-    const vec3 GEL_TINT = vec3(0.439, 0.600, 0.659);   // #7099a8
-    vec3 body = mix(GEL_TINT, pigment, 0.28);          // dome FILL: mostly gel, a wash of fate
+    const vec3 GEL_TINT = vec3(0.27, 0.72, 0.86);
+    vec3 body = mix(GEL_TINT, vec3(0.24, 0.58, 0.92), 0.48);
 
     // (1) split Fresnel — tight glassy edge + broad body falloff. Rim keeps the SATURATED pigment so
     // the fate reads as a bright coloured contour even though the dome fill is near-clear gel.
     float rimT = pow(1.0 - ndv, 4.0);
     float rimB = pow(1.0 - ndv, 1.5);
-    vec3 rimGlow = min(pigment * 1.7, vec3(1.0)) + vec3(0.10, 0.14, 0.16); // cooler, whiter edge
-    vec3 rim = (rimT * 1.2 + rimB * 0.5) * rimGlow;
+    vec3 rimGlow = min(mix(vec3(0.18, 0.96, 1.0), vec3(1.0, 0.22, 0.8), 0.34 + 0.28 * vFrill) * 2.05, vec3(1.65));
+    vec3 rim = (rimT * 2.05 + rimB * 0.82) * rimGlow * uGlowBoost;
 
     // (2) thickness/backlight transmission — the SSS fake. Key light below/behind.
     vec3 L = normalize(vec3(0.0, -1.0, 0.3));
@@ -219,8 +173,8 @@ export const bellFragment = /* glsl */ `
     float caustic = vCaustic;                    // 0..1, from bellVertex (2-octave)
     float mottle = mix(0.62, 1.35, caustic) * (0.55 + 0.45 * thickness / 0.16);
 
-    vec3 interior = body * (0.58 + 1.35 * uAlive) * core * mottle * uGlowBoost;
-    vec3 lantern = satHue * uGlow * core * 2.5 * mix(0.85, 1.15, caustic) * uGlowBoost; // hue-safe, gently veined
+    vec3 interior = body * (0.72 + 1.65 * uAlive) * core * mottle * uGlowBoost;
+    vec3 lantern = satHue * uGlow * core * 3.25 * mix(0.85, 1.15, caustic) * uGlowBoost;
 
     // Keep the hue-carrying CORE its colour even when bright: reproject toward the SATURATED hue as
     // it brightens. The thin Fresnel EDGES may blow white (real glass) — a separate additive term so
@@ -228,7 +182,19 @@ export const bellFragment = /* glsl */ `
     vec3 bodyGlow = interior + transmit + lantern;
     float bl = max(max(bodyGlow.r, bodyGlow.g), bodyGlow.b);
     if (bl > 0.85) bodyGlow = mix(bodyGlow, satHue * bl, clamp((bl - 0.85) * 1.1, 0.0, 0.9));
-    vec3 edge = rim * (0.3 + 0.5 * uAlive) + body * vFrill * 0.28 * (0.4 + uAlive);
+    // Radial canals and petal chambers are the defining anatomy in the reference medusae. They are
+    // shaded into the single bell surface (rather than layered transparent shells), preserving stable
+    // sorting while giving the dome a richly segmented, internally illuminated construction.
+    float theta = atan(vLocal.z, vLocal.x);
+    float radial = length(vLocal.xz);
+    float ribWave = 0.5 + 0.5 * cos(theta * 16.0 + uSeed * 6.2831853);
+    float ribs = pow(ribWave, 12.0) * smoothstep(0.08, 0.72, radial) * smoothstep(1.05, 0.5, radial);
+    float chambers = pow(0.5 + 0.5 * cos(theta * 12.0 + uSeed * 3.1), 4.0)
+                   * smoothstep(0.38, 0.82, radial) * (1.0 - smoothstep(0.82, 1.08, radial));
+    vec3 anatomyHue = mix(vec3(0.16, 0.92, 1.0), vec3(1.0, 0.12, 0.72), 0.62 + 0.24 * chambers);
+    vec3 anatomy = anatomyHue * (ribs * (0.85 + 1.15 * uAlive) + chambers * 0.72)
+                 * (0.65 + 0.35 * caustic) * uGlowBoost;
+    vec3 edge = rim * (0.3 + 0.5 * uAlive) + body * vFrill * 0.28 * (0.4 + uAlive) + anatomy;
 
     // ── #1 PULSE-SYNCED MARGIN BIOLUMINESCENCE — the lace rim flashes softly on each contraction, the
     // way Aequorea flare at the bell margin. It RECONSTRUCTS the exact vertex jet phase (bellVertex:
@@ -240,7 +206,7 @@ export const bellFragment = /* glsl */ `
     float flash = pow(max(sin(mTravel), 0.0), 3.0);
     edge += body * vFrill * flash * 0.35 * uAlive;
 
-    vec3 col = bodyGlow + edge;
+    vec3 col = (bodyGlow + edge) * 1.85;
 
     // NormalBlending; density scales with aliveness so a husk stays wispy and a sealed bell is
     // dense — but the apex stays translucent (lower center alpha) so the neural mind reads through
@@ -249,7 +215,7 @@ export const bellFragment = /* glsl */ `
     // the low floor made the head wash out to nothing while the additive tentacles kept their colour
     // (the "head clear, tentacles coloured until you get close" bug).
     float apexClear = 1.0 - vHeight * 0.28;      // thinner, clearer over the brain
-    float a = uOpacity * (0.34 + 0.4 * uAlive + 0.35 * (rimT + rimB) * 0.5 + uGlow * 0.10 + vFrill * 0.12) * apexClear;
+    float a = uOpacity * (0.62 + 0.48 * uAlive + 0.46 * (rimT + rimB) * 0.5 + uGlow * 0.18 + vFrill * 0.18) * apexClear;
 
     // atmospheric perspective: fade the body toward the water haze with distance so far medusae sink
     // INTO the medium. BUT the colour must survive the fade or the head reads as a clear dome next to
@@ -328,6 +294,8 @@ export const swayFragment = /* glsl */ `
   uniform vec3 uColor;
   uniform float uOpacity;
   uniform float uAdvisory;  // 1 = ghosted (DT advisory head): see-through, desaturated
+  uniform float uRibbon;
+  uniform float uEmphasis;
   varying vec2 vUv;
   varying float vT;
   varying float vFogDepth;
@@ -345,8 +313,19 @@ export const swayFragment = /* glsl */ `
     // dimmer trails: the tentacles are SUPPORTING structure, not the subject — the bell is. Lowered the
     // luminance (0.42+0.5→0.30+0.4) and the base alpha (0.72→0.5) so many additive trails sum to a faint
     // coloured haze the bell floats above, rather than a field of bright green blades competing with it.
-    vec3 col = tint * (0.30 + 0.4 * glow);
-    float a = uOpacity * (0.5 - 0.32 * vT);
+    float across = abs(vUv.y - 0.5) * 2.0;
+    float ribbonBody = 1.0 - smoothstep(0.58, 1.0, across);
+    float ribbonEdge = smoothstep(0.42, 0.82, across) * ribbonBody * uRibbon;
+    vec3 rose = vec3(1.0, 0.20, 0.72);
+    vec3 pearl = vec3(0.82, 0.58, 1.0);
+    vec3 tissue = mix(rose, pearl, 0.2 + 0.34 * vT);
+    vec3 trailColor = tint * (0.12 + 0.12 * glow) * uEmphasis;
+    vec3 ribbonColor = tissue * (0.58 + 0.22 * glow) * uEmphasis;
+    ribbonColor += mix(vec3(0.45, 0.9, 1.0), pearl, 0.5) * ribbonEdge * 0.24 * uEmphasis;
+    vec3 col = mix(trailColor, ribbonColor, uRibbon);
+    float tissueAlpha = mix(0.42 - 0.28 * vT, 0.58 - 0.32 * vT, uRibbon);
+    float coverage = mix(1.0, ribbonBody, uRibbon);
+    float a = uOpacity * tissueAlpha * coverage * (0.68 + ribbonEdge * 0.35) * min(uEmphasis, 1.0);
     if (uAdvisory > 0.5) {                 // DT: visibly not load-bearing
       col = mix(col, vec3(dot(col, vec3(0.33))), 0.55);
       a *= 0.4;
@@ -356,7 +335,48 @@ export const swayFragment = /* glsl */ `
     float fog = fogFactor(vFogDepth);
     a *= (1.0 - 0.75 * fog);
     col *= (1.0 - 0.5 * fog);
-    gl_FragColor = vec4(col, clamp(a, 0.0, 1.0));
+    a = clamp(a, 0.0, 0.48);
+    if (a < 0.003) discard;
+    gl_FragColor = vec4(mix(col, col * a, uRibbon), a);
+  }
+`
+
+export const filamentVertex = /* glsl */ `
+  attribute float aT;
+  attribute float aPhase;
+  uniform float uTime;
+  uniform float uSeed;
+  uniform float uAmp;
+  varying float vT;
+  varying float vFogDepth;
+  void main() {
+    vT = aT;
+    vec3 p = position;
+    float w = pow(aT, 1.55);
+    float phase = uTime * 0.42 - aT * 4.8 + aPhase + uSeed * 6.2831853;
+    p.x += sin(phase) * uAmp * w;
+    p.z += cos(phase * 0.83 + aPhase) * uAmp * 0.72 * w;
+    p.x += sin(uTime * 0.17 + aPhase * 2.0) * uAmp * 0.12 * aT;
+    vec4 mv = modelViewMatrix * vec4(p, 1.0);
+    vFogDepth = -mv.z;
+    gl_Position = projectionMatrix * mv;
+  }
+`
+
+export const filamentFragment = /* glsl */ `
+  precision highp float;
+  uniform vec3 uColor;
+  uniform vec3 uAccent;
+  uniform float uOpacity;
+  varying float vT;
+  varying float vFogDepth;
+  ${FOG}
+  void main() {
+    float fade = pow(1.0 - vT, 0.42);
+    vec3 color = mix(vec3(1.0, 0.03, 0.58), vec3(1.0, 0.62, 0.96), 0.2 + 0.28 * vT);
+    float fog = fogFactor(vFogDepth);
+    float alpha = uOpacity * fade * (1.0 - 0.72 * fog);
+    gl_FragColor = vec4(color * (3.8 + 2.1 * fade), alpha);
   }
 `
 

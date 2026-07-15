@@ -53,13 +53,11 @@ export interface BloomSpec {
   title: string
   tier: string
   bellRadius: number
-  /** This-decade survival (0.34..1): the whole creature is scaled by it so the tank visibly thins as
-   *  stocks collapse. Applied as a smooth group scale in Jellyfish, not baked into the geometry. */
+  /** Jellyfish presence (0.05..1): collapse makes the medusa grow into the emptied niche. */
   decadeScale: number
-  /** Death descent 0..1 (0 healthy → 1 husk): Jellyfish drifts the creature DOWN into the dark and
-   *  dims it by this, so a collapsing stock slowly sinks and loses life rather than shrinking in place. */
+  /** Buoyant bloom lift 0..1: collapse makes the medusa rise rather than sink. */
   sink: number
-  /** Steady inner glow 0..1. Here: how close the stock is to its historical peak (thriving = 1). */
+  /** Medusa radiance 0..1: inverse of catch remaining relative to the observed peak. */
   glow: number
   vitality: Vitality
   /** Two-tone split — lit industrial vs small-scale fleet. (Was engineering vs experience.) */
@@ -70,7 +68,7 @@ export interface BloomSpec {
   bellColor: string
   /** Luminous tank hue for the dark medium — the semantic fate color. */
   tankColor: string
-  /** Baseline self-glow 0..1 from vitality — a thriving stock shines, a husk goes near-dark. */
+  /** Baseline medusa vitality 0..1: collapse makes the animal flourish. */
   alive: number
   /** Seven tentacles ← the seven decades, severed from the collapse decade. */
   tentacles: TentacleSpec[]
@@ -142,18 +140,11 @@ export function stockAsOf(
 /** Build the BloomSpec[] for the whole tank as of a given decade (default: final, 2010s). */
 export function buildBloom(stocks: Stock[], decade = 6): BloomSpec[] {
   return stocks.map((s) => {
-    const { fate, severFrom, glow } = stockAsOf(s, decade)
+    const { fate, severFrom, glow: stockHealth } = stockAsOf(s, decade)
     const hue = FATE_COLOR[fate]
     const tankColor = TANK_TINT[fate]
-
-    // TEMPORAL MASS — the bell shrinks as the stock collapses. Cross-stock scale still reads (a big
-    // stock is a big creature via s.size, log lifetime tonnage), but each bell is then scaled by how
-    // much of its OWN peak survives at THIS decade (glow = now/peak). So scrubbing forward genuinely
-    // EMPTIES the tank — a husk shrivels to ~a third of its peak footprint instead of hanging on as a
-    // big recoloured dome. Floored at 0.34 so a collapsed stock still reads as a (small, dim) creature
-    // rather than vanishing (vanishing would erase the datum). This is the change that makes the
-    // collapse feel like loss, not a palette swap.
-    const decadeScale = 0.34 + 0.66 * glow
+    const collapse = 1 - stockHealth
+    const presence = 0.05 + 0.95 * Math.pow(collapse, 0.9)
 
     const tentacles: TentacleSpec[] = DECADES.map((d, i) => ({
       stage: d,
@@ -170,25 +161,16 @@ export function buildBloom(stocks: Stock[], decade = 6): BloomSpec[] {
       color: hue,
     }))
 
-    // SINK — a dying stock doesn't just shrink, it slowly loses buoyancy and drifts DOWN into the
-    // dark. 0 while healthy, rising toward 1 as it collapses (shaped so a mild decline barely sinks
-    // but a husk sinks deep). Applied as a downward Y offset + extra dimming in Jellyfish, so the
-    // graveyard literally settles into the depths over the arc. Continuous in glow → smooth descent.
-    const sink = Math.pow(1 - glow, 1.7)
-
-    // continuous vitality baseline (was the discrete ALIVE_OF[fate] step): a stock's self-glow fades
-    // smoothly with its survival rather than snapping at the fate thresholds. 0.12 floor keeps a husk
-    // faintly present; scales to ~0.9 at full peak.
-    const alive = 0.12 + 0.78 * glow
+    const alive = 0.14 + 0.86 * presence
 
     return {
       id: s.id,
       title: s.name,
       tier: s.group,
       bellRadius: 0.5 + s.size * 0.9, // log-tonnage lifetime mass → readable bell radius (geometry base)
-      decadeScale, // this-decade survival multiplier — applied as a SMOOTH group scale (not geometry)
-      sink, // 0..1 death descent — Jellyfish offsets Y downward + dims by this
-      glow,
+      decadeScale: presence,
+      sink: presence,
+      glow: presence,
       vitality: VITALITY_OF[fate],
       engWeight: s.industrialShare, // two-tone: industrial vs small-scale fleet
       expWeight: 1 - s.industrialShare,
@@ -214,6 +196,7 @@ export function buildBloom(stocks: Stock[], decade = 6): BloomSpec[] {
  *  Jellyfish calls this each frame with the store's live decadeF and eases its uniforms toward the
  *  result, so colour/glow/mass/sink flow like water. Pure; no allocation beyond the small return. */
 export interface StockVisuals {
+  /** Medusa radiance/presence, not stock health. */
   glow: number
   alive: number
   decadeScale: number
@@ -223,12 +206,14 @@ export interface StockVisuals {
   tankColor: string
 }
 export function visualsAsOf(s: Stock, decadeF: number): StockVisuals {
-  const { fate, glow } = stockAsOf(s, decadeF)
+  const { fate, glow: stockHealth } = stockAsOf(s, decadeF)
+  const collapse = 1 - stockHealth
+  const presence = 0.05 + 0.95 * Math.pow(collapse, 0.9)
   return {
-    glow,
-    alive: 0.12 + 0.78 * glow,
-    decadeScale: 0.34 + 0.66 * glow,
-    sink: Math.pow(1 - glow, 1.7),
+    glow: presence,
+    alive: 0.14 + 0.86 * presence,
+    decadeScale: presence,
+    sink: presence,
     fate,
     tankColor: TANK_TINT[fate],
   }

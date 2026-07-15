@@ -40,6 +40,7 @@ const invEaseInOut = (y: number) => {
 // slider at 2018. `beatDecade` maps beat elapsed-seconds → the year the renderer should show; `beatPhase`
 // names the sub-beat for the visual overrides. All from the store's fields (see bloomControls).
 const easeOut = (x: number) => 1 - (1 - x) * (1 - x)
+const ENABLE_TIPPING_POINT_BEAT = false
 function beatPhaseAt(elapsedS: number): 'fade' | 'black' | 'ignite' | 'settle' {
   if (elapsedS < BEAT_FADE_S) return 'fade'
   if (elapsedS < BEAT_FADE_S + BEAT_BLACK_S) return 'black'
@@ -123,7 +124,7 @@ export function App() {
         // re-arm once we've rewound below the inflection (covers a scrub-back-then-play)
         if (hasFiredBeat.current && nextDecade < BEAT_ARM_BELOW) hasFiredBeat.current = false
         // FIRE — a forward crossing of the inflection this frame starts the beat
-        if (!hasFiredBeat.current && prevDecade < BEAT_INFLECTION_DECADEF && nextDecade >= BEAT_INFLECTION_DECADEF) {
+        if (ENABLE_TIPPING_POINT_BEAT && !hasFiredBeat.current && prevDecade < BEAT_INFLECTION_DECADEF && nextDecade >= BEAT_INFLECTION_DECADEF) {
           hasFiredBeat.current = true
           beatStart.current = now
           beatFromDecade.current = nextDecade

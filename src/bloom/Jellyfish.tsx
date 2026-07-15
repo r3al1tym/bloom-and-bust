@@ -10,7 +10,6 @@
 // meaning, not everything.
 import { useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
-import { MeshTransmissionMaterial } from '@react-three/drei'
 import * as THREE from 'three'
 import type { BloomSpec } from './bloomModel'
 import { driftSeed, STAGE_COUNT, visualsAsOf } from './bloomModel'
@@ -22,13 +21,16 @@ import {
   swayFragment,
   neuralVertex,
   neuralFragment,
+  filamentVertex,
+  filamentFragment,
 } from './bloomShaders'
 import {
   makeBellGeometry,
   makeDendrites,
-  makeTentacleGeometry,
-  makeStubGeometry,
+  makeTentacleLineGeometry,
   makeRibbonGeometry,
+  makeRuffledOralGeometry,
+  makeFilamentCurtain,
 } from './bloomGeometry'
 import { dotTexture, haloTexture } from './dotTexture'
 import { useBloomControls, beatEnvelope } from './bloomControls'
@@ -49,7 +51,7 @@ const PULSE_BASE_RATE = 1.2
 // (never per-creature) so the whole field converges together. Pure f(clock, decadeProgress, seed) —
 // reversible: hues re-vary and phases re-diverge on a backward scrub, no latch.
 const CLINICAL_CYAN = new THREE.Color('#7FE8FF')
-const CYAN_MAX_PULL = 0.9
+const CYAN_MAX_PULL = 0.68
 
 // Pulse rate / depth by vitality — the bell's "mood", and (same field) the neural firing rate, so
 // the mind can never disagree with the breath.
@@ -87,58 +89,65 @@ export function Jellyfish({ spec, stock, position, selected, dimmed, focal, onSe
   const neuralMat = useRef<THREE.ShaderMaterial>(null)
   const haloMat = useRef<THREE.SpriteMaterial>(null)
   const haloSprite = useRef<THREE.Sprite>(null)
-  const glassRef = useRef<THREE.Mesh>(null) // hero-only refraction shell — pulsed to match the bell
+  const filamentMat = useRef<THREE.ShaderMaterial>(null)
   const swayMats = useRef<THREE.ShaderMaterial[]>([])
   const seed = useMemo(() => driftSeed(spec.id), [spec.id])
   const pulse = PULSE[spec.vitality]
   const r = spec.bellRadius
-  const hero = spec.vitality === 'sealed' && spec.glow >= 1
+  const hero = focal || spec.glow >= 0.72
+  const featured = position[2] > 0.5
+  const presentation = featured ? 1.8 : 0.52
 
   // per-jellyfish volumetric halo: EVERY medusa carries a soft aura, so none reads as unlit. A small
   // floor (0.22) keeps even a husk faintly glowing; above it the strength scales with aliveness and
   // the arbiter outcome (uGlow) so a cleared run still glows brighter — the semantic survives.
-  const haloBase = 0.22 + 0.5 * spec.alive + 0.35 * spec.glow
-  const haloScale = r * (hero ? 5.4 : 4.2)
+  const haloBase = (0.05 + 0.16 * spec.alive + 0.12 * spec.glow) * (focal ? 1.2 : 0.78)
+  const haloScale = r * (focal ? 2.8 : hero ? 2.25 : 1.9)
 
   // ── bell ──
   const bellGeo = useMemo(() => makeBellGeometry(r, hero), [r, hero])
   const bellUniforms = useMemo(
     () => ({
       uTime: { value: 0 },
-      uPulseRate: { value: pulse.rate },
-      uPulseDepth: { value: pulse.depth },
+      uPulseRate: { value: PULSE_BASE_RATE },
+      uPulseDepth: { value: 0.18 },
       uSeed: { value: seed },
       uRadius: { value: r },
-      uFrillFreq: { value: 9.0 },
-      uFrillAmp: { value: r * 0.05 },
-      uMarginFlare: { value: r * 0.1 },
-      // soft-body jiggle: livelier on anxious/fluttering runs, near-still on a husk. Sealed (hero)
-      // gets a touch more (0.045) so the focused medusa's wall visibly ripples, not just breathes.
-      uJiggle: {
-        value:
-          spec.vitality === 'husk'
-            ? 0.01
-            : spec.vitality === 'flutter'
-              ? 0.05
-              : spec.vitality === 'sealed'
-                ? 0.045
-                : 0.03,
-      },
-      uColor: { value: new THREE.Color(spec.tankColor) },
-      uColorB: { value: new THREE.Color(spec.tankColor).multiplyScalar(1.5) },
+      uFrillFreq: { value: 12 },
+      uFrillAmp: { value: r * 0.045 },
+      uMarginFlare: { value: r * 0.055 },
+      uJiggle: { value: 0.08 },
+      uColor: { value: new THREE.Color('#39e9ff') },
+      uColorB: { value: new THREE.Color('#ff55cf') },
       uSplit: { value: spec.engWeight },
       uGlow: { value: spec.glow },
       uAlive: { value: spec.alive },
-      uOpacity: { value: 1 },
-      uThicknessPow: { value: 3.0 },
-      uGlowBoost: { value: 1.0 }, // live-tuned per frame from the control panel
-      uFogDensity: { value: 0.058 }, // live-tuned; matches scene fog
+      uOpacity: { value: 0.9 },
+      uThicknessPow: { value: 2.2 },
+      uGlowBoost: { value: 2.5 },
+      uFogDensity: { value: 0.058 },
     }),
-    [spec.id], // eslint-disable-line react-hooks/exhaustive-deps
+    [r, seed, spec.alive, spec.engWeight, spec.glow],
   )
 
   // ── neural brain (dendrites) ──
   const dendrite = useMemo(() => makeDendrites(r, seed), [r, seed])
+  const filamentGeo = useMemo(
+    () => makeFilamentCurtain(r, seed, featured ? 68 : hero ? 44 : 30),
+    [r, seed, featured, hero],
+  )
+  const filamentUniforms = useMemo(
+    () => ({
+      uTime: { value: 0 },
+      uSeed: { value: seed },
+      uAmp: { value: r * (focal ? 0.7 : 0.48) },
+      uColor: { value: new THREE.Color(spec.tankColor) },
+      uAccent: { value: new THREE.Color('#ff63cf') },
+      uOpacity: { value: focal ? 0.62 : 0.44 },
+      uFogDensity: { value: 0.058 },
+    }),
+    [spec.id], // eslint-disable-line react-hooks/exhaustive-deps
+  )
   const dendriteGeo = useMemo(() => {
     const g = new THREE.BufferGeometry()
     g.setAttribute('position', new THREE.BufferAttribute(dendrite.positions, 3))
@@ -196,8 +205,7 @@ export function Jellyfish({ spec, stock, position, selected, dimmed, focal, onSe
     // collapse, so their slots stay near-empty — the ABSENCE of a jellyfish is the healthy outcome, and
     // the aggregate bloom fills the frame as the sum of every stock that fell. Pure f(glow ⟸ decadeF),
     // so it grows on a forward scrub and recedes on a backward one — no latch.
-    const collapse = 1 - v.glow // 0 healthy → 1 collapsed
-    const bloom = 0.05 + 0.95 * Math.pow(collapse, 0.9) // presence: faint floor → full vibrant medusa
+    const bloom = v.glow
 
     // #4 THE BEAT — during the scripted tipping point the medusae themselves dim (so the whole tank, not
     // just the world, goes dark in 'black') then flare on the ignite. `doom` 0..1 dims bell/glow/halo;
@@ -238,25 +246,15 @@ export function Jellyfish({ spec, stock, position, selected, dimmed, focal, onSe
     if (bellMat.current) {
       const u = bellMat.current.uniforms
       u.uTime.value = t
-      u.uGlowBoost.value = ctl.glowBoost * dapple // sun-dapple grazes the gel
-      u.uFogDensity.value = ctl.fogDensity
-      // BLOOM IN / FADE OUT — a medusa's opacity IS its bloom presence: near-invisible where its stock
-      // is healthy (barely there in the empty 1950 water), fading up to a solid gel bell as the stock
-      // collapses and the jellyfish takes over. So the frame fills with substance as the fishery empties.
-      const target = (dimmed ? 0.55 : 1) * (0.06 + 0.94 * bloom) * (1 - 0.85 * doom)
-      // during the beat the opacity must snap with it, not lag on the slow dt*4 low-pass
-      u.uOpacity.value += (target - u.uOpacity.value) * (ctl.beatActive ? 0.3 : Math.min(1, dt * 4))
-      // ease uniforms toward the current bloom state (colour / glow / pulse / aliveness)
-      ;(u.uColor.value as THREE.Color).lerp(targetColor, k)
-      ;(u.uColorB.value as THREE.Color).lerp(targetColorB, k)
-      // interior lantern brightens as the jellyfish blooms — its own vitality, not a fish stock's. The
-      // beat dims it toward dark (doom) then flares it brighter-than-normal as the light returns (flare).
-      const glowTarget = bloom * (1 - 0.9 * doom) + 0.6 * flare
-      u.uGlow.value += (glowTarget - u.uGlow.value) * (ctl.beatActive ? 0.3 : k)
-      u.uAlive.value += (bloomAlive - u.uAlive.value) * k
-      u.uSplit.value += (spec.engWeight - u.uSplit.value) * k
-      u.uPulseRate.value += (PULSE_BASE_RATE - u.uPulseRate.value) * k // fixed phase rate (see const)
       u.uPulseDepth.value += (pDepth - u.uPulseDepth.value) * k
+      const bloomRadiance = 0.35 + 2.65 * Math.pow(bloom, 1.15)
+      u.uGlow.value += (bloomRadiance * (1 - 0.9 * doom) + 0.55 * flare - u.uGlow.value) * k
+      u.uAlive.value += ((0.35 + 1.65 * bloomAlive) * (1 - 0.9 * doom) - u.uAlive.value) * k
+      u.uOpacity.value += (((dimmed ? 0.34 : 0.88) * (0.14 + 0.86 * bloom)) - u.uOpacity.value) * k
+      u.uGlowBoost.value = ctl.glowBoost * dapple * (1.9 + 2.6 * bloom)
+      u.uFogDensity.value = ctl.fogDensity
+      ;(u.uColor.value as THREE.Color).lerp(new THREE.Color('#38e8ff'), k)
+      ;(u.uColorB.value as THREE.Color).lerp(new THREE.Color('#ff53cb'), k)
     }
     if (neuralMat.current) {
       const u = neuralMat.current.uniforms
@@ -275,16 +273,12 @@ export function Jellyfish({ spec, stock, position, selected, dimmed, focal, onSe
       // floating over an invisible bell — the dendrite fan was the brightest thing left at the start.
       u.uIntensity.value = bloomAlive * bloom * (dimmed ? 0.4 : 1) * (1 - 0.97 * doom) + 0.35 * flare * bloom
     }
-    if (glassRef.current) {
-      // HERO GLASS SHELL — MeshTransmissionMaterial runs its own vertex shader, so it CAN'T carry the
-      // bell's jet-pulse displacement; left alone it sits rigid inside the breathing bell, which is
-      // exactly why the focused hero read as static/glassy. Reproduce the bell's dominant pulse
-      // envelope (bloomShaders.bellVertex, sampled at the apex h≈1) as a non-uniform scale so the
-      // refraction core squashes/bulges in lockstep with the gel around it. Base 0.94 = shell inset.
-      const phase = t * PULSE_BASE_RATE + phaseOffset // fixed rate; offset converges with the field (#2)
-      const s = Math.sin(phase)
-      const p = (s > 0 ? Math.pow(s, 0.6) : -Math.pow(-s, 1.4)) * pDepth
-      glassRef.current.scale.set(0.94 * (1 - p * 0.55), 0.94 * (1 + p), 0.94 * (1 - p * 0.55))
+    if (filamentMat.current) {
+      const u = filamentMat.current.uniforms
+      u.uTime.value = t
+      u.uFogDensity.value = ctl.fogDensity
+      u.uOpacity.value = (focal ? 0.22 + bloom * 0.52 : 0.16 + bloom * 0.42) * (dimmed ? 0.25 : 1) * (1 - 0.9 * doom)
+      ;(u.uColor.value as THREE.Color).lerp(targetColor, k)
     }
     if (haloMat.current && group.current) {
       // ── #6 AURA BREATH-LAG — the glow swells just AFTER the bell contracts (a 0.8-rad lag) and drifts
@@ -303,7 +297,7 @@ export function Jellyfish({ spec, stock, position, selected, dimmed, focal, onSe
       // above) so the shared sun-ripple lights the auras too without throbbing.
       // halo scales from ~0 (absent jelly = no aura) to full at bloom — the old 0.14 floor gave every
       // barely-present 1950 jelly a visible glow, part of the "too many at the start" read.
-      const liveHaloBase = 0.02 + 0.84 * bloom
+      const liveHaloBase = (0.02 + 0.84 * bloom) * 0.72
       const haloDapple = 1 + (dapple - 1) * 0.5
       const target =
         liveHaloBase * ctl.haloBoost * breath * haloDapple * (dimmed ? 0.4 : 1) * (1 - 0.7 * fog) * (1 - 0.9 * doom) + 0.25 * flare
@@ -346,6 +340,7 @@ export function Jellyfish({ spec, stock, position, selected, dimmed, focal, onSe
         if (m.userData.baseAmp === undefined) {
           m.userData.baseAmp = m.uniforms.uAmp.value
           m.userData.baseFreq = m.uniforms.uFreq.value
+          m.userData.baseOpacity = m.uniforms.uOpacity.value
         }
         m.uniforms.uAmp.value = m.userData.baseAmp * slackAmp
         m.uniforms.uFreq.value = m.userData.baseFreq * slackFreq
@@ -353,7 +348,7 @@ export function Jellyfish({ spec, stock, position, selected, dimmed, focal, onSe
         // barely present (else the 1950 sea reads as a field of skeletal trails + glowing minds while the
         // bells are gone — the "why so many jellyfish at the start" bug). Same 0.06→full curve as the bell
         // opacity, dimmed further by the beat's doom so they go dark in the tipping-point black too.
-        m.uniforms.uOpacity.value = (0.04 + 0.96 * bloom) * (1 - 0.85 * doom)
+        m.uniforms.uOpacity.value = m.userData.baseOpacity * (0.04 + 0.96 * bloom) * (1 - 0.85 * doom)
         // ── #2 JET-RECOIL SURGE — the whole bundle whips taut on the contraction kick and streams back
         // out on the glide (overlapping action across the bell→tentacle boundary — the medusa's defining
         // secondary motion). Drives the shader's uSurge* uniforms off the SAME pulsePhase as the bell, so
@@ -403,26 +398,6 @@ export function Jellyfish({ spec, stock, position, selected, dimmed, focal, onSe
       group.current.rotation.x = tilt.pitch + Math.sin(t * tilt.wSpeed + seed * 6.28) * 0.12 + nod
       group.current.rotation.z = tilt.roll + curX * 0.15 + Math.cos(t * tilt.wSpeed * 0.8 + seed * 3.1) * 0.1
       group.current.rotation.y = Math.sin(t * 0.15 + seed * 6.28) * 0.22
-      // ── BLOOM SCALE — a jellyfish grows from a faint seed into a full medusa as its stock collapses,
-      // so the tank fills with mass exactly as the fishery empties. Floored at 0.35 so an absent jelly is
-      // a small drifting presence, not gone (the datum stays countable). Eased smoothly so scrubbing a
-      // stock into collapse GROWS its jellyfish before your eyes.
-      const s = (0.35 + 0.65 * bloom) * (selected ? 1.12 : 1)
-      const cs = group.current.scale.x
-      group.current.scale.setScalar(cs + (s - cs) * Math.min(1, dt * 3))
-
-      // DEPTH-RANKED DRAW ORDER — the parts are all depthWrite:false (translucent, so the brain reads
-      // through the gel and far bells sink into the fog), which means NO depth-buffer occlusion between
-      // creatures: they composite purely in draw order. The parts carried a GLOBAL renderOrder
-      // (halo 0 / brain 1 / bell 2 / tentacles 3), so every tentacle drew after every bell regardless
-      // of distance — a back creature's tentacles painted on top of a front creature's body. Fix:
-      // rank each creature by camera distance and offset its whole stack, so a nearer medusa draws
-      // entirely after a farther one (painter's algorithm) while the intra-creature layering holds.
-      const base = -camDist * 100 // farther → more negative → drawn first (behind)
-      group.current.traverse((o) => {
-        if (o.userData.layer === undefined) o.userData.layer = o.renderOrder // capture the local layer once
-        o.renderOrder = base + o.userData.layer
-      })
     }
   })
 
@@ -432,7 +407,7 @@ export function Jellyfish({ spec, stock, position, selected, dimmed, focal, onSe
   }
 
   return (
-    <group ref={group} position={position}>
+    <group ref={group} position={position} scale={presentation * (selected ? 1.08 : 1)} renderOrder={focal ? 100 : 0}>
       {/* hit target */}
       <mesh
         onClick={(e) => {
@@ -508,36 +483,31 @@ export function Jellyfish({ spec, stock, position, selected, dimmed, focal, onSe
         />
       </points>
 
-      {/* REFRACTION — a real glass shell just inside the FOCAL creature's bell that BENDS the
-          god-light, the other medusae, and the tentacles behind it (drei transmission). Each
-          MeshTransmissionMaterial does a full-scene FBO render, so this MUST be the single focal hero
-          only — gating on `hero` (vitality-sealed) fired one per creature (all 28 at the 1950s peak),
-          the scene's dominant cost. The biggest "this is real, not CG" cue, kept where the eye is. */}
-      {focal && (
-        <mesh ref={glassRef} geometry={bellGeo} scale={0.94} renderOrder={1}>
-          <MeshTransmissionMaterial
-            transmission={1}
-            thickness={r * 0.6}
-            roughness={0.06}
-            ior={1.33} /* water */
-            chromaticAberration={0.04}
-            distortion={0.4}
-            distortionScale={0.4}
-            temporalDistortion={0.15}
-            samples={4}
-            resolution={256}
-            backside={false}
-            transparent
-            depthWrite={false}
-            color={spec.tankColor}
-            attenuationColor={spec.tankColor}
-            attenuationDistance={r * 2}
-          />
-        </mesh>
+      {/* LUMINOUS INNER ORGANS — four soft gonad/stomach lobes create the layered pink-violet core
+          visible through the gel in the reference animals. Instanced: one draw call per creature. */}
+      <InnerOrgans r={r} color={spec.tankColor} dimmed={dimmed} focal={focal} />
+      <BellCrown r={r} dimmed={dimmed} focal={focal} />
+      <BellRibs r={r} dimmed={dimmed} focal={focal} />
+      <mesh position={[0, r * 0.12, 0]} scale={[r * 0.58, r * 0.34, r * 0.58]} renderOrder={1}>
+        <sphereGeometry args={[1, 24, 16]} />
+        <meshBasicMaterial
+          color="#55dcff"
+          transparent
+          opacity={(0.06 + spec.glow * 0.2) * (dimmed ? 0.25 : 1)}
+          blending={THREE.AdditiveBlending}
+          depthWrite={false}
+          toneMapped={false}
+        />
+      </mesh>
+      {featured && (
+        <group>
+          <pointLight position={[0, -r * 0.75, r * 0.18]} color="#ff4fc8" intensity={5.5} distance={r * 7} decay={2} />
+          <pointLight position={[0, r * 0.35, -r * 0.3]} color="#52e8ff" intensity={4.2} distance={r * 5} decay={2} />
+        </group>
       )}
 
       {/* THE BELL — lathe sea-nettle, frilled margin, SSS translucency (renderOrder 2, over brain) */}
-      <mesh geometry={bellGeo} renderOrder={2}>
+      <mesh geometry={bellGeo} renderOrder={featured ? 42 : 2} scale={featured ? [1.15, 1.08, 1.15] : 1}>
         <shaderMaterial
           ref={bellMat}
           vertexShader={bellVertex}
@@ -545,10 +515,37 @@ export function Jellyfish({ spec, stock, position, selected, dimmed, focal, onSe
           uniforms={bellUniforms}
           transparent
           depthWrite={false}
+          depthTest
           side={THREE.DoubleSide}
           blending={THREE.NormalBlending}
+          toneMapped={false}
         />
       </mesh>
+      <mesh position={[0, -r * 0.015, 0]} rotation={[Math.PI / 2, 0, 0]} renderOrder={3}>
+        <torusGeometry args={[r * 0.9, r * (focal ? 0.026 : 0.018), 8, 72]} />
+        <meshBasicMaterial
+          color={focal ? '#63f4ff' : '#54cfe8'}
+          transparent
+          opacity={(focal ? 1 : 0.78) * (dimmed ? 0.28 : 1)}
+          blending={THREE.AdditiveBlending}
+          depthWrite={false}
+          toneMapped={false}
+        />
+      </mesh>
+
+      {/* SECONDARY FILAMENT CURTAIN — biological density around, but distinct from, the seven primary
+          decade tentacles. One batched line draw preserves performance across the full drift. */}
+      <lineSegments geometry={filamentGeo} renderOrder={featured ? 44 : 3}>
+        <shaderMaterial
+          ref={filamentMat}
+          vertexShader={filamentVertex}
+          fragmentShader={filamentFragment}
+          uniforms={filamentUniforms}
+          transparent
+          depthWrite={false}
+          blending={THREE.AdditiveBlending}
+        />
+      </lineSegments>
 
       {/* SEVEN TENTACLES — the gates. Long, GPU-swayed, outcome-colored; severed → blunt stub, no sway. */}
       {spec.tentacles.map((tt, i) => {
@@ -556,7 +553,7 @@ export function Jellyfish({ spec, stock, position, selected, dimmed, focal, onSe
         const ang = (i / n) * Math.PI * 2
         const rx = Math.cos(ang) * r * 0.62
         const rz = Math.sin(ang) * r * 0.62
-        const full = r * (8 + (hero ? 5 : (i % 4)))
+        const full = r * (5.2 + (hero ? 2.6 : (i % 3) * 0.7))
         return (
           <Appendage
             key={tt.stage}
@@ -567,32 +564,19 @@ export function Jellyfish({ spec, stock, position, selected, dimmed, focal, onSe
             color={tt.color}
             severed={tt.severed}
             seed={seed + i * 0.13}
-            kind="tentacle"
+              kind="tentacle"
+              focal={focal}
             registerMat={registerSway}
           />
         )
       })}
 
       {/* ORAL ARMS — the heads. PA solid (gates), DT ghosted (advisory). Length ← confidence. */}
-      {spec.arms.map((a, i) => {
+      {spec.arms.flatMap((a, i) => {
         const ang = (i / Math.max(spec.arms.length, 1)) * Math.PI * 2 + 0.4
-        const rx = Math.cos(ang) * r * 0.22
-        const rz = Math.sin(ang) * r * 0.22
-        return (
-          <Appendage
-            key={a.head}
-            x={rx}
-            z={rz}
-            length={r * (2.5 + a.confidence * 2.0)}
-            r={r}
-            color={a.color}
-            severed={false}
-            advisory={a.advisory}
-            seed={seed + 5 + i}
-            kind="ribbon"
-            registerMat={registerSway}
-          />
-        )
+        return i < (featured ? 3 : 0) ? (
+          <FocalOralFolds key={a.head} r={r} angle={ang} confidence={a.confidence} advisory={a.advisory} seed={seed + 5 + i} dimmed={dimmed} compact={!featured} />
+        ) : []
       })}
 
       {/* FLOOR STINGS — terracotta sparks, one per discard unit, ringing the bell rim. One
@@ -620,6 +604,164 @@ export function Jellyfish({ spec, stock, position, selected, dimmed, focal, onSe
         }),
       )}
     </group>
+  )
+}
+
+const ORGAN_GEO = new THREE.SphereGeometry(1, 16, 12)
+const CROWN_GEO = new THREE.SphereGeometry(1, 20, 14)
+const RIB_GEO = new THREE.CapsuleGeometry(1, 1, 5, 8)
+const MARGIN_GEO = new THREE.SphereGeometry(1, 12, 8)
+
+function FocalOralFolds({
+  r,
+  angle,
+  confidence,
+  advisory,
+  seed,
+  dimmed,
+  compact = false,
+}: {
+  r: number
+  angle: number
+  confidence: number
+  advisory: boolean
+  seed: number
+  dimmed: boolean
+  compact?: boolean
+}) {
+  const folds = compact ? [-2, -1, 0, 1, 2] : [-3, -2, -1, 0, 1, 2, 3]
+  return (
+    <group rotation={[0, angle, 0]} position={[0, -r * 0.05, 0]} renderOrder={48}>
+      {folds.map((fold) => {
+        const length = r * ((compact ? 1.8 : 2.7) + confidence * (compact ? 1.2 : 1.9) + Math.abs(fold) * 0.12)
+        const geometry = makeRuffledOralGeometry(length, seed + fold * 0.17)
+        return (
+          <mesh key={fold} geometry={geometry} position={[fold * r * 0.085, 0, fold * r * 0.075]} rotation={[0.08 * (fold % 2), fold * 0.16, fold * 0.035]} renderOrder={48}>
+            <meshBasicMaterial
+              color={fold % 2 === 0 ? '#ffd3f2' : '#e8d5ff'}
+              side={THREE.DoubleSide}
+              forceSinglePass
+              transparent
+              opacity={(advisory ? 0.22 : compact ? 0.68 : 0.88) * (dimmed ? 0.28 : 1)}
+              blending={THREE.AdditiveBlending}
+              depthWrite={false}
+              depthTest
+              toneMapped={false}
+            />
+          </mesh>
+        )
+      })}
+    </group>
+  )
+}
+
+function BellRibs({ r, dimmed, focal }: { r: number; dimmed: boolean; focal: boolean }) {
+  const count = focal ? 16 : 12
+  const ribRef = useRef<THREE.InstancedMesh>(null)
+  const marginRef = useRef<THREE.InstancedMesh>(null)
+  const setRibs = (mesh: THREE.InstancedMesh | null) => {
+    ribRef.current = mesh
+    if (!mesh) return
+    const dummy = new THREE.Object3D()
+    for (let i = 0; i < count; i++) {
+      const angle = (i / count) * Math.PI * 2
+      dummy.position.set(Math.cos(angle) * r * 0.64, r * 0.43, Math.sin(angle) * r * 0.64)
+      dummy.rotation.set(Math.PI / 2, angle + Math.PI / 2, 0)
+      dummy.scale.set(r * 0.034, r * 0.57, r * 0.034)
+      dummy.updateMatrix()
+      mesh.setMatrixAt(i, dummy.matrix)
+    }
+    mesh.instanceMatrix.needsUpdate = true
+  }
+  const setMargins = (mesh: THREE.InstancedMesh | null) => {
+    marginRef.current = mesh
+    if (!mesh) return
+    const dummy = new THREE.Object3D()
+    for (let i = 0; i < count; i++) {
+      const angle = (i / count) * Math.PI * 2
+      dummy.position.set(Math.cos(angle) * r * 1.0, r * 0.015, Math.sin(angle) * r * 1.0)
+      dummy.rotation.set(0, angle, 0)
+      dummy.scale.set(r * 0.15, r * 0.12, r * 0.075)
+      dummy.updateMatrix()
+      mesh.setMatrixAt(i, dummy.matrix)
+      mesh.setColorAt(i, new THREE.Color(i % 2 === 0 ? '#72f4ff' : '#ff6de2'))
+    }
+    mesh.instanceMatrix.needsUpdate = true
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true
+  }
+  return (
+    <group renderOrder={3}>
+      <instancedMesh ref={setRibs} args={[RIB_GEO, undefined, count]}>
+        <meshBasicMaterial color="#78f6ff" transparent opacity={(focal ? 0.9 : 0.56) * (dimmed ? 0.25 : 1)} blending={THREE.AdditiveBlending} depthWrite={false} depthTest={false} toneMapped={false} />
+      </instancedMesh>
+      <instancedMesh ref={setMargins} args={[MARGIN_GEO, undefined, count]}>
+        <meshBasicMaterial vertexColors transparent opacity={(focal ? 1 : 0.72) * (dimmed ? 0.25 : 1)} blending={THREE.AdditiveBlending} depthWrite={false} depthTest={false} toneMapped={false} />
+      </instancedMesh>
+    </group>
+  )
+}
+
+function BellCrown({ r, dimmed, focal }: { r: number; dimmed: boolean; focal: boolean }) {
+  const ref = useRef<THREE.InstancedMesh>(null)
+  const setMesh = (mesh: THREE.InstancedMesh | null) => {
+    ref.current = mesh
+    if (!mesh) return
+    const dummy = new THREE.Object3D()
+    const count = focal ? 12 : 8
+    for (let i = 0; i < count; i++) {
+      const angle = (i / count) * Math.PI * 2
+      dummy.position.set(Math.cos(angle) * r * 0.55, r * 0.24, Math.sin(angle) * r * 0.55)
+      dummy.rotation.set(0.15, angle, 0.28 * Math.sin(angle * 2))
+      dummy.scale.set(r * 0.18, r * 0.11, r * 0.09)
+      dummy.updateMatrix()
+      mesh.setMatrixAt(i, dummy.matrix)
+      mesh.setColorAt(i, new THREE.Color(i % 2 === 0 ? '#856dff' : '#ff65d8'))
+    }
+    mesh.instanceMatrix.needsUpdate = true
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true
+  }
+  return (
+    <instancedMesh ref={setMesh} args={[CROWN_GEO, undefined, focal ? 12 : 8]} renderOrder={1}>
+      <meshBasicMaterial
+        vertexColors
+        transparent
+        opacity={(focal ? 0.76 : 0.46) * (dimmed ? 0.25 : 1)}
+        depthWrite={false}
+        blending={THREE.AdditiveBlending}
+        toneMapped={false}
+      />
+    </instancedMesh>
+  )
+}
+
+function InnerOrgans({ r, color, dimmed, focal }: { r: number; color: string; dimmed: boolean; focal: boolean }) {
+  const meshRef = useRef<THREE.InstancedMesh>(null)
+  const setMesh = (mesh: THREE.InstancedMesh | null) => {
+    meshRef.current = mesh
+    if (!mesh) return
+    const dummy = new THREE.Object3D()
+    for (let i = 0; i < 4; i++) {
+      const angle = i * Math.PI / 2 + 0.45
+      dummy.position.set(Math.cos(angle) * r * 0.26, r * 0.28, Math.sin(angle) * r * 0.26)
+      dummy.rotation.set(0.25 * Math.sin(angle), angle, 0.5 + i * 0.4)
+      dummy.scale.set(r * 0.19, r * 0.17, r * 0.13)
+      dummy.updateMatrix()
+      mesh.setMatrixAt(i, dummy.matrix)
+    }
+    mesh.instanceMatrix.needsUpdate = true
+  }
+  const organColor = useMemo(() => new THREE.Color(color).lerp(new THREE.Color('#ff62d6'), 0.7), [color])
+  return (
+    <instancedMesh ref={setMesh} args={[ORGAN_GEO, undefined, 4]} renderOrder={1}>
+      <meshBasicMaterial
+        color={organColor}
+        transparent
+        opacity={(focal ? 1 : 0.64) * (dimmed ? 0.3 : 1)}
+        depthWrite={false}
+        blending={THREE.AdditiveBlending}
+        toneMapped={false}
+      />
+    </instancedMesh>
   )
 }
 
@@ -667,6 +809,8 @@ function Appendage({
   advisory = false,
   seed,
   kind,
+  focal = false,
+  emphasis = 1,
   registerMat,
 }: {
   x: number
@@ -678,11 +822,13 @@ function Appendage({
   advisory?: boolean
   seed: number
   kind: 'tentacle' | 'ribbon'
+  focal?: boolean
+  emphasis?: number
   registerMat: (m: THREE.ShaderMaterial | null) => void
 }) {
   const geo = useMemo(() => {
     if (kind === 'ribbon') return makeRibbonGeometry(length)
-    return severed ? makeStubGeometry(r, false) : makeTentacleGeometry(length, false)
+    return makeTentacleLineGeometry(length, severed)
   }, [kind, length, severed, r])
 
   const uniforms = useMemo(
@@ -694,30 +840,46 @@ function Appendage({
       uLag: { value: 5.0 },
       uStiff: { value: 1.8 },
       uTwist: { value: kind === 'ribbon' ? 2.5 : 0 },
+      uRibbon: { value: kind === 'ribbon' ? 1 : 0 },
+      uEmphasis: { value: kind === 'tentacle' ? 0.16 : emphasis },
       uColor: { value: new THREE.Color(color) },
-      uOpacity: { value: 1 },
+      uOpacity: { value: kind === 'ribbon' ? 0.22 : severed ? 0.48 : 0.42 },
       uAdvisory: { value: advisory ? 1 : 0 },
       uFogDensity: { value: 0.058 },
       uSurgePhase: { value: 0 }, // driven per-frame from the creature's bell pulse (jet-recoil surge)
       uSurgeDepth: { value: 0 }, // = pDepth·stillness
     }),
-    [seed, severed, kind, r, color, advisory],
+    [seed, severed, kind, r, color, advisory, emphasis],
   )
 
   return (
     <group position={[x, 0, z]}>
-      <mesh geometry={geo} renderOrder={3}>
+      {kind === 'ribbon' ? <mesh geometry={geo} renderOrder={focal ? 108 : 2}>
         <shaderMaterial
           ref={registerMat}
           vertexShader={swayVertex}
           fragmentShader={swayFragment}
           uniforms={uniforms}
           transparent
-          side={kind === 'ribbon' ? THREE.DoubleSide : THREE.FrontSide}
+          side={THREE.DoubleSide}
+          forceSinglePass
+          depthWrite={false}
+          depthTest
+          premultipliedAlpha
+          blending={THREE.NormalBlending}
+          toneMapped={false}
+        />
+      </mesh> : <lineSegments geometry={geo} renderOrder={focal ? 107 : 3}>
+        <shaderMaterial
+          ref={registerMat}
+          vertexShader={swayVertex}
+          fragmentShader={swayFragment}
+          uniforms={uniforms}
+          transparent
           depthWrite={false}
           blending={THREE.AdditiveBlending}
         />
-      </mesh>
+      </lineSegments>}
     </group>
   )
 }

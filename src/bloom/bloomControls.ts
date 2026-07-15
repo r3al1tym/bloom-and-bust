@@ -71,20 +71,20 @@ export interface BloomControlsState {
 // luminance threshold so only the brightest bell CORES bloom — the drift stays legible as many
 // distinct creatures, not one white cloud.
 export const BLOOM_DEFAULTS = {
-  bloomIntensity: 1.15,
+  bloomIntensity: 0.72,
   // 0.9→0.87: let the now-HDR neural fan feather (mipmapBlur gives the 1px canals apparent width).
   // Held above 0.86 as a white-clip guard — the brain gain (1.7) + clearer gel dome already push more
   // energy through, and the threshold was raised to 0.9 originally because 28 lit stocks clipped white.
-  bloomThreshold: 0.87,
+  bloomThreshold: 1.05,
   bloomRadius: 0.85,
-  grain: 0.45,
+  grain: 0.24,
   vignette: 0.8,
   waterSpeed: 0.9,
   fogDensity: 0.11,
-  glowBoost: 0.6,
+  glowBoost: 0.82,
   haloBoost: 0.5,
   driftSpeed: 1.0,
-  driftAmount: 1.0,
+  driftAmount: 0.55,
 } satisfies Partial<BloomControlsState>
 
 // The live OrbitControls pose, written every frame from inside the Canvas (CameraPoseProbe) so the

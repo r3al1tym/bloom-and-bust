@@ -2,6 +2,7 @@
 // Produced by scripts/extract.ts from the Sea Around Us catch data on the AWS Registry of Open
 // Data, then committed to public/data/bloom.json. The renderer OWNS no data and derives nothing
 // about the pipeline — every visible part of a medusa maps to one field below.
+import bloomData from './bloom.json'
 
 export type Fate = 'thriving' | 'declining' | 'collapsed' | 'husk'
 
@@ -66,6 +67,7 @@ export const PULSE: Record<Fate, { rate: number; depth: number; alive: number }>
 }
 
 export async function loadBloom(): Promise<BloomData> {
+  if (window.location.protocol === 'file:') return bloomData as BloomData
   const res = await fetch(`${import.meta.env.BASE_URL}data/bloom.json`)
   if (!res.ok) throw new Error(`could not load bloom.json: ${res.status}`)
   return res.json()

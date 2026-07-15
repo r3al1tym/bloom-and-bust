@@ -6,23 +6,15 @@
 // This is the v2 "Thinking Medusa" renderer, severed from its origin project: it consumes a
 // BloomSpec[] (built by bloomModel.ts from real catch data) and takes its data + selection as
 // PROPS — no shared store, no pace-engine domain code.
-import { useMemo, useRef, useEffect, type ComponentRef, type RefObject } from 'react'
+import { useMemo, useRef, useLayoutEffect, type ComponentRef, type RefObject } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { OrbitControls } from '@react-three/drei'
-import {
-  EffectComposer,
-  Bloom,
-  ToneMapping,
-  Vignette,
-  SMAA,
-  Noise,
-} from '@react-three/postprocessing'
-import { ToneMappingMode, BlendFunction } from 'postprocessing'
+import { Bloom, EffectComposer, Vignette } from '@react-three/postprocessing'
 import * as THREE from 'three'
 import { buildBloom, visualsAsOf, type BloomSpec } from './bloomModel'
 import { Jellyfish } from './Jellyfish'
 import { Atmosphere } from './Atmosphere'
-import { useBloomControls, liveCamPose, worldDarkness, beatEnvelope } from './bloomControls'
+import { useBloomControls, worldDarkness, beatEnvelope } from './bloomControls'
 import { BloomControlPanel } from './BloomControlPanel'
 import type { Stock } from '@/data/bloom'
 import './bloom.css'
@@ -38,40 +30,63 @@ import './bloom.css'
 // the lone lantern the camera cranes to.
 function layout(specs: BloomSpec[]): [number, number, number][] {
   const n = specs.length
-  // hero = a thriving survivor if any (the lone green lantern); else the biggest bell (most catch)
-  let heroIdx = specs.findIndex((s) => s.vitality === 'sealed')
-  if (heroIdx < 0) heroIdx = specs.reduce((best, s, i) => (s.bellRadius > specs[best].bellRadius ? i : best), 0)
+  const heroIndices = specs
+    .map((spec, index) => ({ index, score: spec.glow * spec.bellRadius }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 3)
+    .map(({ index }) => index)
+  const heroSlots: [number, number, number][] = [[2.6, 1.4, 3.6], [-4.3, 2.3, 1.2], [6.3, -1.2, -0.2]]
 
   const out: [number, number, number][] = new Array(n)
-  out[heroIdx] = [0, -0.2, 3.2] // centre, forward and slightly low — the subject the crane lands on
-
-  const others = specs.map((_, i) => i).filter((i) => i !== heroIdx)
-  const m = others.length
   const GOLDEN = Math.PI * (3 - Math.sqrt(5)) // golden angle ≈ 2.399963 rad — even angular spread
   // half-axes of the drift ellipsoid (world units). WIDE + shallow-tall + deep for a big legible field.
-  const RX = 13.5
-  const RY = 7.0
-  const RZ = 8.5
-  others.forEach((idx, k) => {
+  const RX = 13.8
+  const RY = 7.6
+  const RZ = 11.5
+  specs.forEach((_, idx) => {
+    const heroSlot = heroIndices.indexOf(idx)
+    if (heroSlot >= 0) {
+      out[idx] = heroSlots[heroSlot]
+      return
+    }
     // Fibonacci-sphere point: cosθ walks evenly down [-1,1], φ advances by the golden angle. This is
     // the classic even-point-on-a-sphere construction — no clustering, no seams, fully deterministic.
-    const t = (k + 0.5) / m
+    const t = (idx + 0.5) / n
     const cosPol = 1 - 2 * t // -1..1
     const sinPol = Math.sqrt(Math.max(0, 1 - cosPol * cosPol))
-    const phi = k * GOLDEN
+    const phi = idx * GOLDEN
     const ux = Math.cos(phi) * sinPol
     const uy = cosPol
     const uz = Math.sin(phi) * sinPol
     // A gentle deterministic radial jitter so it reads as an organic drift, not a taut shell.
-    const rj = 0.82 + 0.18 * Math.sin(k * 1.7 + 0.5)
+    const rj = 0.82 + 0.18 * Math.sin(idx * 1.7 + 0.5)
     const x = ux * RX * rj
     // bias the field a touch downward so the forward hero reads as rising above the drift
     const y = uy * RY * rj - 0.6
     // keep the whole field behind the hero plane (hero at z=3.2) so it never occludes the subject
-    const z = uz * RZ * rj - 2.0
-    out[idx] = [x, y, z]
+    const z = uz * RZ * rj - 5.0
+    out[idx] = [x, y, Math.min(z, 0.2)]
   })
   return out
+}
+
+function RenderProbe() {
+  const { gl, scene, camera } = useThree()
+  const frames = useRef(0)
+  useFrame(() => {
+    frames.current += 1
+    if (frames.current % 30 !== 0) return
+    ;(window as Window & { __bloomProbe?: unknown }).__bloomProbe = {
+      frames: frames.current,
+      camera: camera.position.toArray(),
+      direction: camera.getWorldDirection(new THREE.Vector3()).toArray(),
+      children: scene.children.map((child) => ({ name: child.name, type: child.type, visible: child.visible })),
+      render: { ...gl.info.render },
+      memory: { ...gl.info.memory },
+      background: scene.background instanceof THREE.Color ? scene.background.getHexString() : null,
+    }
+  }, -1000)
+  return null
 }
 
 interface Props {
@@ -116,15 +131,18 @@ export function BloomRenderer({
   const specs = useMemo(() => buildBloom(stocks, decadeInt), [stocks, decadeInt])
   // layout is anchored to the stock set (not the decade) so creatures hold position as you scrub
   const baseSpecs = useMemo(() => buildBloom(stocks, 2), [stocks])
+  const finalSpecs = useMemo(() => buildBloom(stocks, 6), [stocks])
+  const focalIndex = useMemo(
+    () => finalSpecs.reduce(
+      (best, spec, i) => (
+        spec.glow * spec.bellRadius > finalSpecs[best].glow * finalSpecs[best].bellRadius ? i : best
+      ),
+      0,
+    ),
+    [finalSpecs],
+  )
   const positions = useMemo(() => layout(baseSpecs), [baseSpecs])
-  // the SINGLE focal creature the crane lands on — only it renders the costly refraction shell.
-  // Same choice as layout()'s hero (a thriving survivor, else the biggest bell), resolved to an id so
-  // it's stable across the decade scrub even as vitality flips.
-  const focalId = useMemo(() => {
-    let i = baseSpecs.findIndex((s) => s.vitality === 'sealed')
-    if (i < 0) i = baseSpecs.reduce((best, s, k) => (s.bellRadius > baseSpecs[best].bellRadius ? k : best), 0)
-    return baseSpecs[i]?.id ?? null
-  }, [baseSpecs])
+  const focalId = finalSpecs[focalIndex]?.id ?? null
   const hasSelection = selectedId != null
   const controls = useRef<ComponentRef<typeof OrbitControls>>(null)
   const ambientRef = useRef<THREE.AmbientLight>(null) // #1 — dimmed/cooled by WorldDarkClock as the sea dies
@@ -154,14 +172,14 @@ export function BloomRenderer({
   // read them via getState(). Fog itself is driven imperatively in FogClock below so the murk thickens
   // 0.09 → 0.15 as the fishery dies without a reactive fogDensity subscription re-rendering the scene.
   const decadeCount = Math.max(decades.length - 1, 1)
-  useEffect(() => {
+  useLayoutEffect(() => {
     const p = decade / decadeCount
     // AGGREGATE BLOOM LEVEL — mean over the 28 stocks of (1 - glow) at the live decade, the exact
     // per-creature `collapse` averaged. Computed ONCE here (28 cheap pure calls, no re-render — plain
     // store write with no subscribers) so darkness-rise / uniformity / the beat all read one honest
     // number rather than re-deriving it per creature.
     let sum = 0
-    for (const s of stocks) sum += 1 - visualsAsOf(s, decade).glow
+    for (const s of stocks) sum += visualsAsOf(s, decade).glow
     const bloomLevel = sum / Math.max(1, stocks.length)
     useBloomControls.setState({ decadeF: decade, decadeProgress: p, bloomLevel })
   }, [decade, decadeCount, stocks])
@@ -169,23 +187,32 @@ export function BloomRenderer({
   // current year, continuous (1950..2018), for the scrubber readout
   const year = Math.round(1950 + (decade / decadeCount) * spanYears)
 
-  const bloomIntensity = useBloomControls((s) => s.bloomIntensity)
-  const bloomThreshold = useBloomControls((s) => s.bloomThreshold)
-  const bloomRadius = useBloomControls((s) => s.bloomRadius)
-  const grain = useBloomControls((s) => s.grain)
-  const vignette = useBloomControls((s) => s.vignette)
-
   return (
     <div className="bloom">
       <BloomControlPanel />
       <div className={`bloom-tank${hasSelection ? ' has-selection' : ''}`}>
+        <span className="bloom-build-stamp" aria-hidden="true">gel-ruffle-3</span>
         <Canvas
           camera={{ position: [0, 1.0, 17], fov: 52 }}
-          gl={{ antialias: false, toneMappingExposure: 1.15 }}
+          gl={{
+            antialias: false,
+            toneMapping: THREE.NoToneMapping,
+            toneMappingExposure: 1,
+          }}
           dpr={[1, 1.75]}
+          onCreated={(state) => {
+            ;(window as Window & { __bloomState?: unknown; __bloomFocal?: unknown }).__bloomState = state
+            ;(window as Window & { __bloomFocal?: unknown }).__bloomFocal = {
+              id: focalId,
+              index: focalIndex,
+              position: positions[focalIndex],
+              spec: finalSpecs[focalIndex],
+            }
+          }}
           onPointerMissed={() => onSelect(null)}
         >
           <color attach="background" args={['#02080e']} />
+          <RenderProbe />
           <TankBackground />
           <fogExp2 attach="fog" args={['#071a26', 0.09]} />
           <FogClock />
@@ -202,7 +229,8 @@ export function BloomRenderer({
             dampingFactor={0.08}
             target={[0, 0, 0]}
           />
-          <CinematicCamera controls={controls} />
+          {/* The data field animates continuously; keep the camera composed and stable. User orbit
+              remains available, but an unattended camera must never fly through a foreground bell. */}
           {specs.map((spec, i) => (
             <Jellyfish
               key={spec.id}
@@ -219,20 +247,14 @@ export function BloomRenderer({
           <EffectComposer multisampling={0} enableNormalPass={false}>
             <Bloom
               mipmapBlur
-              luminanceThreshold={bloomThreshold}
-              luminanceSmoothing={0.36}
-              intensity={bloomIntensity}
-              radius={bloomRadius}
+              luminanceThreshold={0.72}
+              luminanceSmoothing={0.22}
+              intensity={1.15}
+              radius={0.62}
             />
-            <ToneMapping mode={ToneMappingMode.ACES_FILMIC} />
-            <Vignette
-              eskil={false}
-              darkness={hasSelection ? vignette + 0.13 : vignette}
-              offset={hasSelection ? 0.26 : 0.3}
-            />
-            <SMAA />
-            <Noise blendFunction={BlendFunction.OVERLAY} opacity={grain} />
+            <Vignette eskil={false} offset={0.3} darkness={hasSelection ? 0.62 : 0.48} />
           </EffectComposer>
+
         </Canvas>
         {/* orbit affordance — a one-shot whisper that fades itself out after the opening beat (CSS
             animation, auto-fade), so it's discoverable on load without standing as permanent chrome. */}
@@ -349,7 +371,7 @@ function FogClock() {
   const { scene } = useThree()
   useFrame(() => {
     const p = useBloomControls.getState().decadeProgress
-    const target = 0.09 + (0.15 - 0.09) * p
+    const target = 0.07 + (0.095 - 0.07) * p
     const fog = scene.fog as THREE.FogExp2 | null
     if (fog && 'density' in fog) {
       fog.density += (target - fog.density) * 0.06 // ease so a scrub isn't a snap
@@ -379,179 +401,18 @@ function WorldDarkClock({ ambient, point }: { ambient: RefObject<THREE.AmbientLi
     const env = st.beatActive ? beatEnvelope(st.beatPhase, st.beatT) : { dark: 0, ignite: 0 }
     const ease = st.beatActive ? 0.22 : 0.06
     // exposure: steady-state floor 0.60, dropped toward ~0.06 by the beat's dark, lifted +0.5 by ignite.
-    const expBase = Math.max(0.6, 1.15 - 0.55 * d)
+    const expBase = 1
     const expTarget = expBase * (1 - 0.9 * env.dark) + 0.5 * env.ignite
     gl.toneMappingExposure += (expTarget - gl.toneMappingExposure) * ease
     if (ambient.current) {
-      const at = (0.2 - 0.13 * d) * (1 - env.dark) + 0.15 * env.ignite
+      const at = (0.32 - 0.12 * d) * (1 - env.dark) + 0.15 * env.ignite
       ambient.current.intensity += (at - ambient.current.intensity) * ease
     }
     if (point.current) {
-      const pt = (0.5 - 0.4 * d) * (1 - env.dark) + 0.4 * env.ignite
+      const pt = (0.92 - 0.42 * d) * (1 - env.dark) + 0.4 * env.ignite
       point.current.intensity += (pt - point.current.intensity) * ease
       point.current.color.copy(baseKey).lerp(deadKey, d) // teal fill cools to a dead slate
     }
-  })
-  return null
-}
-
-// A slow cinematic camera drift — a high reveal that cranes down and around to the hero, then a
-// sustained orbit. Yields to any user drag/zoom and eases back in after an idle beat. Verbatim from
-// v2 (domain-agnostic — only touches the camera).
-function CinematicCamera({ controls }: { controls: RefObject<ComponentRef<typeof OrbitControls> | null> }) {
-  const { camera } = useThree()
-  const idle = useRef(0)
-  const hold = useRef(0)
-  const phase = useRef(0)
-  const base = useRef<{ az: number; pol: number; rad: number } | null>(null)
-  const firstRun = useRef(true)
-  const lastNonce = useRef(0)
-  const sph = useMemo(() => new THREE.Spherical(), [])
-  const want = useMemo(() => new THREE.Vector3(), [])
-
-  useEffect(() => {
-    const c = controls.current
-    if (!c) return
-    const dom = c.domElement || document.querySelector('.bloom-tank canvas')
-    const onUser = () => {
-      idle.current = 0
-      hold.current = 0.8
-      base.current = null
-      firstRun.current = false
-    }
-    if (!dom) return
-    dom.addEventListener('pointerdown', onUser)
-    dom.addEventListener('wheel', onUser, { passive: true })
-    return () => {
-      dom.removeEventListener('pointerdown', onUser)
-      dom.removeEventListener('wheel', onUser)
-    }
-  }, [controls])
-
-  useFrame((_s, dt) => {
-    const c = controls.current
-    if (!c) return
-    const st = useBloomControls.getState()
-
-    liveCamPose.az = c.getAzimuthalAngle()
-    liveCamPose.pol = c.getPolarAngle()
-    liveCamPose.rad = c.getDistance()
-
-    if (st.freeze) {
-      base.current = null
-      firstRun.current = false
-      idle.current = 0
-      hold.current = 0.4
-      return
-    }
-
-    if (st.replayNonce !== lastNonce.current) {
-      lastNonce.current = st.replayNonce
-      phase.current = 0
-      idle.current = 3
-      hold.current = 0
-      base.current = null
-      firstRun.current = true
-    }
-
-    idle.current += dt
-    const gate = Math.min(1, Math.max(0, (idle.current - hold.current) / 2.2))
-    if (gate <= 0) return
-    const { driftSpeed, driftAmount, camStart, camEnd } = st
-    phase.current += dt * gate * driftSpeed
-
-    if (!base.current) {
-      base.current = { az: c.getAzimuthalAngle(), pol: c.getPolarAngle(), rad: c.getDistance() }
-    }
-    const b = base.current
-    const t = phase.current
-    const establishing = firstRun.current
-    const authored = establishing && camStart != null && camEnd != null
-
-    const TAU = 5.0
-    const descend = establishing ? 1 - Math.exp(-t / 7.0) : 1
-    const drawIn = establishing ? 1 - Math.exp(-t / 1.75) : 1
-
-    const START_POL = 0.42
-    const START_RAD_MUL = 1.45
-    const START_AZ_OFF = 0.7
-    // Settle FARTHER than the origin's 0.78 crowd-in: the drift is now a wide 28-creature field, so the
-    // hero-landing frame must keep the whole bloom legible (green survivors vs coral/slate husks reading
-    // across the frame) rather than filling the view with a few foreground bells. 0.98 = a gentle
-    // draw-in that still lands on the hero without crowding out the data pattern.
-    const HERO_RAD_MUL = establishing ? 0.98 : 1.0
-    const START = authored
-      ? camStart!
-      : { az: b.az + START_AZ_OFF, pol: Math.min(b.pol, START_POL), rad: b.rad * START_RAD_MUL }
-    const HERO = authored ? camEnd! : { az: b.az, pol: b.pol, rad: b.rad * HERO_RAD_MUL }
-
-    // ── ESTABLISHING CRANE (unchanged intent): descend from the high, wide START to the settled HERO
-    // framing, winding a gentle net orbit so the reveal arcs IN rather than just dropping straight down.
-    // BOUNDED: the arc-in settles to a fixed net azimuth (~0.6 rad) via a saturating exp, instead of the
-    // old `t - TAU·(1-exp)` term that grew LINEARLY forever — that endless slow rotation was the
-    // "turntable orbit" read. Once the crane lands, this contributes NO ongoing rotation; the only
-    // sustained camera motion is the bounded diver-drift below (wander + dolly + bob), so the camera
-    // behaves like a diver holding on a subject and drifting, never a tripod circling a tank.
-    const ORBIT_ARC = 0.6 // total radians the establishing crane winds in, then holds
-    const orbit = establishing ? ORBIT_ARC * (1 - Math.exp(-t / TAU)) : ORBIT_ARC
-    const heroAz = HERO.az + orbit
-    const baseAz = START.az + (heroAz - START.az) * descend
-    const basePol = START.pol + (HERO.pol - START.pol) * descend
-    const settledRad = START.rad + (HERO.rad - START.rad) * drawIn
-
-    // ── DIVER-CAM — once the crane settles, the camera stops behaving like a tripod on a turntable
-    // circling a tank and starts behaving like a National Geographic operator in neutral buoyancy in
-    // the deep: it drifts THROUGH the bloom, its look-point wandering across the swarm, with slow
-    // non-circular dolly pushes-and-retreats, a buoyant bob, and a touch of handheld roll — never a
-    // clean circle. Everything is a sum of sines at incommensurate (irrational-ish) frequencies so the
-    // path has no repeating period and never reads as a loop. It FADES IN only AFTER the establishing
-    // crane has fully LANDED (t 10s→16s) so the opening reveal stays a pure, still, mysterious crane-down
-    // — the diver wander/roll/dolly must never smear over the descent (that was the intro regression).
-    // Full-strength on every later drift-in (non-establishing), where it's the only camera motion.
-    const diver = establishing ? THREE.MathUtils.smoothstep(t, 10.0, 16.0) : 1.0
-    const A = driftAmount * diver
-    // two-octave sine wander: two incommensurate frequencies so it wanders like a current, not a wave.
-    const w = (f1: number, a1: number, f2: number, a2: number, ph: number) =>
-      a1 * Math.sin(t * f1 + ph) + a2 * Math.sin(t * f2 + ph * 1.7)
-
-    // ── DIVER DRIFT — assertive enough to read as an operator MOVING through the bloom, not a tripod
-    // holding still. Amplitudes ~2× the old timid wander and a touch faster, so the camera visibly
-    // repositions: swings wide around subjects (az), rises/dives (pol), and the look-point tracks across
-    // the swarm. Still incommensurate sines (no repeating loop) and bounded (never leaves the bloom).
-    const az = baseAz + w(0.045, 0.34, 0.023, 0.20, 0.0) * A // swing wide around the bloom, both sides
-    const pol = basePol + w(0.034, 0.20, 0.018, 0.10, 2.1) * A // the eye-line rises and dives more freely
-    // dolly: decisive pushes IN toward a subject then eases back OUT — a diver closing on something, then
-    // giving it space. Bigger swing (0.11→0.20) so the approach reads as intent, not breathing.
-    const dolly = 1 + (w(0.028, 0.2, 0.047, 0.09, 4.3) + 0.02 * Math.sin(t * 0.6)) * A
-    const rad = establishing
-      ? settledRad * (1 - 0.06 * drawIn * Math.sin(t * 0.24)) * dolly
-      : settledRad * dolly
-
-    // the LOOK-POINT drifts through the swarm (the operator tracking subjects), so the framing isn't
-    // pinned dead-centre. Ease OrbitControls' own target toward the wander point so c.update() looks
-    // there — and so a later user-orbit pivots around wherever the camera had drifted to. Wider range
-    // (the operator follows creatures across the field) + slight downward bias (peering into the deep).
-    // Lerped (not set) so resuming from a user drag eases in without a snap. During establishing A≈0.
-    const tx = w(0.03, 3.4, 0.017, 1.8, 0.5) * A
-    const ty = (w(0.024, 1.7, 0.041, 0.7, 3.4) - 0.4) * A
-    const tz = w(0.021, 2.6, 0.035, 1.3, 1.2) * A
-    c.target.x += (tx - c.target.x) * Math.min(1, dt * 1.5)
-    c.target.y += (ty - c.target.y) * Math.min(1, dt * 1.5)
-    c.target.z += (tz - c.target.z) * Math.min(1, dt * 1.5)
-
-    sph.set(rad, pol, az)
-    sph.makeSafe()
-    want.setFromSpherical(sph).add(c.target)
-    // buoyant bob on the camera body itself — a small, slightly faster vertical breath (the operator
-    // floating in place), layered so it doesn't beat against the eye-line wander.
-    want.y += (0.14 * Math.sin(t * 0.9 + 1.0) + 0.06 * Math.sin(t * 1.7)) * A
-    camera.position.copy(want)
-    c.update() // orients the camera to look at c.target (the wandering look-point)
-    // handheld ROLL — a subtle tilt around the view axis so the horizon isn't locked dead-flat. Applied
-    // AFTER c.update() (which enforces up-vector); re-applied each frame, and harmless to orbit state
-    // (OrbitControls derives its angles from camera POSITION, not roll).
-    const roll = (0.02 * Math.sin(t * 0.23) + 0.011 * Math.sin(t * 0.52 + 2.0)) * A
-    camera.rotateZ(roll)
   })
   return null
 }

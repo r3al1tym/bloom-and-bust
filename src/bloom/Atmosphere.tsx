@@ -4,100 +4,9 @@
 import { useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
-import { rayVertex, rayFragment } from './bloomShaders'
 import { makeMarineSnow } from './bloomGeometry'
 import { dotTexture } from './dotTexture'
-import { useBloomControls, worldDarkness, beatEnvelope } from './bloomControls'
-
-function GodRay({
-  x,
-  y = 4,
-  z = -4,
-  rot,
-  seed,
-  w,
-  h,
-  color = '#6fb2cc',
-}: {
-  x: number
-  y?: number
-  z?: number
-  rot: number
-  seed: number
-  w: number
-  h: number
-  color?: string
-}) {
-  const uniforms = useMemo(
-    () => ({
-      uTime: { value: 0 },
-      uSeed: { value: seed },
-      uColor: { value: new THREE.Color(color) },
-      uLight: { value: 1 },
-    }),
-    [seed, color],
-  )
-  // Early-warmth colour targets for this shaft: baseColor is its authored cyan; warmColor is a golden
-  // sunbeam shift of that same tint, reached only in the living early water. Nothing else writes uColor,
-  // so the per-frame lerp below ADDS a warmth ease alongside the existing uLight brightness ease.
-  const baseColor = useMemo(() => new THREE.Color(color), [color])
-  // warm twin for the 1950 living water — a richer amber-gold so the early shafts read as warm sunlight,
-  // not a washed pastel. (Documentary grade: the warm accent is the ONE saturated exception to the teal medium.)
-  const warmColor = useMemo(() => baseColor.clone().lerp(new THREE.Color('#ffbf73'), 0.62), [baseColor])
-  const warmScratch = useMemo(() => new THREE.Color(), [])
-  const mat = useRef<THREE.ShaderMaterial>(null)
-  const mesh = useRef<THREE.Mesh>(null)
-  useFrame((s) => {
-    if (mat.current) {
-      mat.current.uniforms.uTime.value = s.clock.elapsedTime
-      // #1 DARKNESS RISES — the surface light doesn't just dim, it nearly GOES OUT as the fishery dies,
-      // so by 2018 the bloom is the only light left. worldDarkness(p) (pow 1.15, late-biased) keeps the
-      // 50s-70s lit and bites post-1990: target 1.0 → ~0.10 (a faint memory of surface, never full black).
-      const st = useBloomControls.getState()
-      const p = st.decadeProgress
-      const d = worldDarkness(p)
-      // #4: the shafts also go out during the beat's fade+black (surface light is the first to die),
-      // and ease faster while it runs so the ~1.4s snap lands. `dark` pulls the target to 0 (full black).
-      const env = st.beatActive ? beatEnvelope(st.beatPhase, st.beatT) : { dark: 0, ignite: 0 }
-      const target = (1 - 0.9 * d) * (1 - env.dark)
-      const cur = mat.current.uniforms.uLight.value
-      mat.current.uniforms.uLight.value = cur + (target - cur) * (st.beatActive ? 0.22 : 0.05)
-      // Early warmth: the god-light itself is golden in the living 50s-60s water and cools to its
-      // authored cyan as the fishery collapses. Shared warmth clock — paletteWarmth = 1 − smoothstep(p,
-      // 0, 0.42): high through the early decades, fully cool by p≈0.42. Same 0.05 ease so a scrub glides.
-      const paletteWarmth = 1 - THREE.MathUtils.smoothstep(p, 0.0, 0.42)
-      warmScratch.copy(baseColor).lerp(warmColor, paletteWarmth)
-      ;(mat.current.uniforms.uColor.value as THREE.Color).lerp(warmScratch, 0.05)
-    }
-    // Y-axis billboard: yaw the shaft to face the camera horizontally while staying vertical, so it
-    // always presents its broad face (never seen edge-on as a flat card) — reads as a volumetric
-    // column from any orbit angle. A slight art-directed lean (rot) is preserved on Z.
-    if (mesh.current) {
-      const dx = s.camera.position.x - x
-      const dz = s.camera.position.z - z
-      mesh.current.rotation.set(0, Math.atan2(dx, dz), rot)
-    }
-  })
-  return (
-    // renderOrder -50 + depthTest off: the shafts live BEHIND the drift as pure background light and
-    // never join the transparent depth-sort against the medusae — kills the sort-order flicker that
-    // made whole shafts pop in front of/behind creatures while orbiting.
-    <mesh ref={mesh} position={[x, y, z]} renderOrder={-50}>
-      <planeGeometry args={[w, h]} />
-      <shaderMaterial
-        ref={mat}
-        vertexShader={rayVertex}
-        fragmentShader={rayFragment}
-        uniforms={uniforms}
-        transparent
-        depthWrite={false}
-        depthTest={false}
-        side={THREE.DoubleSide}
-        blending={THREE.AdditiveBlending}
-      />
-    </mesh>
-  )
-}
+import { useBloomControls } from './bloomControls'
 
 // Two layers of suspended particulate for real depth-of-field payoff: a fine near layer (small,
 // many, faster) and a coarse far layer (big, few, slow) that the DoF pass blurs into glowing bokeh
@@ -257,22 +166,9 @@ function FishShoal() {
 export function Atmosphere() {
   return (
     <>
-      {/* God-light from the surface far above — steep, near-vertical shafts raking DOWN through the
-          water column into the depths, tinted deep-ocean cyan, catching the particulate. Spread
-          across depth (some in front of the drift, some behind) so the volumetric light reads and
-          the DoF turns the near ones into soft glowing columns. Widened to span the new wide drift
-          field and brightened back toward the "lived-in" look (the earlier white-clip retune leaned
-          on lower bloomIntensity/threshold + fog — not on starving the shafts, so this is safe). */}
-      {/* Documentary grade: the shafts are one SATURATED deep-teal family (was pale washed cyan — a
-          low-saturation additive colour reads as flat GRAY, the "gray god-rays" problem). Deeper + more
-          saturated so they carry hue as coloured light through the water, not luminance smears. */}
-      <GodRay x={-13} y={9} z={2} rot={0.11} seed={0.1} w={5} h={38} color="#1f7f96" />
-      <GodRay x={-7} y={9} z={-3} rot={0.07} seed={0.5} w={7} h={40} color="#2e93a8" />
-      <GodRay x={-2} y={9} z={5} rot={0.12} seed={0.8} w={4} h={36} color="#3aa6ba" />
-      <GodRay x={3} y={9} z={-2} rot={0.06} seed={0.3} w={6} h={38} color="#3aa6ba" />
-      <GodRay x={8} y={9} z={2} rot={0.09} seed={0.65} w={5} h={36} color="#1f7f96" />
-      <GodRay x={13} y={9} z={-1} rot={0.1} seed={0.22} w={4.5} h={36} color="#1a6f89" />
-      <GodRay x={0} y={9} z={-9} rot={0.04} seed={0.42} w={11} h={44} color="#175f7d" />
+      {/* Surface light is carried by TankBackground and revealed by particulate. Large
+          camera-facing ray quads were intentionally removed: their 36–44 unit transparent planes
+          intersected the camera path and produced the hard, full-frame wedges seen during drift. */}
       {/* Suspended particulate — TRANSLATES gently (no rigid rotation). Sizes kept above sub-pixel so
           points don't twinkle without MSAA. Three layers now: a dense fine haze, coarse bokeh motes,
           and a slow RISING plankton layer (negative driftY → drifts UP) so the water reads as a moving
